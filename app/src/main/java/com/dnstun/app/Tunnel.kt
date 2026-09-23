@@ -4,7 +4,9 @@ import android.os.ParcelFileDescriptor
 import android.util.Log
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.SocketTimeoutException
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
@@ -189,28 +191,25 @@ class Tunnel(
             }
             if (!bindOk) setError("protect() and bind() both failed - queries would loop into our own VPN")
         }
-        val ch = try {
-            sock.channel
-        } catch (e: Exception) {
-            null
-        }
-        if (ch == null) {
-            setError("no channel on socket")
-            return
-        }
-        ch.configureBlocking(false)
-        channel = ch
+        // A plain socket is blocking; a 2 ms timeout makes receive() return
+        // promptly when nothing is waiting, without the channel machinery
+        // (which has no channel at all on a plain DatagramSocket).
+        runCatching { sock.soTimeout = 2 }
         sockRef = sock
         val resolver = try {
             InetSocketAddress(InetAddress.getByName(cfg.resolver), cfg.port)
         } catch (e: Exception) {
             setError("resolver ${cfg.resolver}: ${e.message}")
+            onStats(TunnelStats(protectOk = protectOk, bindOk = bindOk, lastError = lastError))
             return
         }
         resolverIp = ipToInt(resolver.address)
+        // surface the socket state now, so a dead loop can never look like a
+        // silent blank panel again
+        onStats(TunnelStats(protectOk = protectOk, bindOk = bindOk, depth = depth, lastError = lastError))
         val rnd = Random(System.nanoTime())
         val inflight = HashMap<Int, Long>()
-        val rcv = ByteBuffer.allocate(4096)
+        val rcv = ByteArray(4096)
 
         var lastStat = System.currentTimeMillis()
         var lastAdapt = lastStat
@@ -230,7 +229,7 @@ class Tunnel(
                 val qid = rnd.nextInt(1, 65536)
                 val q = buildQuery(name, qid)
                 try {
-                    ch.send(ByteBuffer.wrap(q), resolver)
+                    sock.send(DatagramPacket(q, q.size, resolver))
                 } catch (e: Exception) {
                     sendErrors.incrementAndGet()
                     if (running.get()) setError("send: ${e.message}")
@@ -243,22 +242,22 @@ class Tunnel(
             // ---- drain everything that is waiting ----
             var got = false
             while (true) {
-                rcv.clear()
-                val from = try {
-                    ch.receive(rcv)
-                } catch (e: Exception) {
-                    recvErrors.incrementAndGet()
-                    if (running.get()) setError("recv: ${e.message}")
+                val pkt = DatagramPacket(rcv, rcv.size)
+                try {
+                    sock.receive(pkt)
+                } catch (e: SocketTimeoutException) {
                     break
-                } ?: break
+                } catch (e: Exception) {
+                    if (running.get()) {
+                        recvErrors.incrementAndGet()
+                        setError("recv: ${e.message}")
+                    }
+                    break
+                }
                 got = true
                 recv.incrementAndGet()
                 lastReplyAt.set(nowMs())
-                rcv.flip()
-                val len = rcv.remaining()
-                val data = ByteArray(len)
-                rcv.get(data)
-                handleResponse(data, len, inflight)
+                handleResponse(pkt.data, pkt.length, inflight)
             }
 
             // ---- drop queries that never came back ----
