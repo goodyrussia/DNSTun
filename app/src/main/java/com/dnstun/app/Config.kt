@@ -75,4 +75,10 @@ data class TunnelStats(
     val tunIdleReads: Long = 0,
     /** packets read out of the tun (0 = nothing is being captured) */
     val tunReads: Long = 0,
+    val tunWriteDropped: Long = 0,
+    /** the call the udp loop is inside right now */
+    val op: String = "",
+    val stalledFor: Long = 0,
+    val probeSent: Int = 0,
+    val probeRecv: Int = 0,
 )

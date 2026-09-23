@@ -63,6 +63,18 @@ class Tunnel(
     private val ownLoopDropped = AtomicLong()
     private val tunIdleReads = AtomicLong()
     private val tunReads = AtomicLong()
+    private val tunWriteDropped = AtomicLong()
+    private val tunWriteQueue = ArrayDeque<ByteArray>()
+    private val tunWriteLock = Object()
+    /** the call we are currently inside - the only way to see a stall from outside */
+    @Volatile private var op = "starting"
+    @Volatile private var stalledFor = 0L
+    private var lastSendAt = 0L
+    // built-in path self-test: 60 queries on distinct qids, count how many come back
+    private val probeQids = HashSet<Int>()
+    private var probeUntil = 0L
+    private var probeSent = 0
+    private var probeRecv = 0
     private var tunOut: FileOutputStream? = null
     private var fragCounter = 0
     private var depth = cfg.startDepth
@@ -74,6 +86,7 @@ class Tunnel(
         if (!running.compareAndSet(false, true)) return
         depth = cfg.startDepth
         thread(name = "dnstun-tun") { tunReader() }
+        thread(name = "dnstun-tunw") { tunWriter() }
         thread(name = "dnstun-udp") { udpLoop() }
     }
 
@@ -184,16 +197,43 @@ class Tunnel(
         }
     }
 
-    private fun writeToTun(pkt: ByteArray, off: Int, len: Int) {
-        val out = tunOut ?: FileOutputStream(tun.fileDescriptor).also { tunOut = it }
-        try {
-            out.write(pkt, off, len)
-        } catch (e: Exception) {
-            if (running.get()) Log.w(TAG, "tun write: ${e.message}")
-            runCatching { out.close() }
-            tunOut = null
+    /**
+     * Writing to the tun can block when the queue is full (which happens exactly
+     * when the phone is NOT consuming packets). Doing that on the udp thread
+     * froze the whole tunnel, so writes are queued and drained by their own
+     * thread - the tunnel keeps running even if the device stops reading.
+     */
+    private fun queueTunWrite(pkt: ByteArray, off: Int, len: Int) {
+        val copy = pkt.copyOfRange(off, off + len)
+        synchronized(tunWriteLock) {
+            if (tunWriteQueue.size < 4096) tunWriteQueue.addLast(copy)
+            else tunWriteDropped.incrementAndGet()
         }
     }
+
+    private fun tunWriter() {
+        val out = try {
+            FileOutputStream(tun.fileDescriptor)
+        } catch (e: Exception) {
+            setError("tun writer: ${e.message}")
+            return
+        }
+        while (running.get()) {
+            val pkt = synchronized(tunWriteLock) { tunWriteQueue.removeFirstOrNull() }
+            if (pkt == null) {
+                Thread.sleep(1)
+                continue
+            }
+            op = "tun-write"
+            try {
+                out.write(pkt)
+            } catch (e: Exception) {
+                if (running.get()) setError("tun write: ${e.message}")
+            }
+        }
+    }
+
+    private fun writeToTun(pkt: ByteArray, off: Int, len: Int) = queueTunWrite(pkt, off, len)
 
     // ------------------------------------------------------------------ udp
 
@@ -245,7 +285,9 @@ class Tunnel(
         val inflight = HashMap<Int, Long>()
         val rcv = ByteArray(4096)
 
-        var lastStat = System.currentTimeMillis()
+        val startedAt = System.currentTimeMillis()
+        lastSendAt = startedAt
+        var lastStat = startedAt
         var lastAdapt = lastStat
         var statSent = 0L
         var statRecv = 0L
@@ -263,7 +305,9 @@ class Tunnel(
                 val qid = rnd.nextInt(1, 65536)
                 val q = buildQuery(name, qid)
                 try {
+                    op = "send"
                     sock.send(DatagramPacket(q, q.size, resolver))
+                    lastSendAt = System.currentTimeMillis()
                 } catch (e: Exception) {
                     sendErrors.incrementAndGet()
                     if (running.get()) setError("send: ${e.message}")
@@ -278,6 +322,7 @@ class Tunnel(
             while (true) {
                 val pkt = DatagramPacket(rcv, rcv.size)
                 try {
+                    op = "recv"
                     sock.receive(pkt)
                 } catch (e: SocketTimeoutException) {
                     break
@@ -291,6 +336,10 @@ class Tunnel(
                 got = true
                 recv.incrementAndGet()
                 lastReplyAt.set(nowMs())
+                if (pkt.length >= 2) {
+                    val rqid = ((pkt.data[0].toInt() and 0xFF) shl 8) or (pkt.data[1].toInt() and 0xFF)
+                    if (probeQids.remove(rqid)) probeRecv++
+                }
                 handleResponse(pkt.data, pkt.length, inflight)
             }
 
@@ -301,6 +350,34 @@ class Tunnel(
             for (qid in stale) {
                 inflight.remove(qid)
                 lost.incrementAndGet()
+                if (probeQids.remove(qid)) probeSent++
+            }
+
+            // ---- stall detector: if we have not managed to send for 3s while
+            //      claiming to run, name the call we are stuck in ----
+            if (lastSendAt > 0 && now - lastSendAt > 3000) {
+                stalledFor = (now - lastSendAt) / 1000
+                setError("STALLED ${stalledFor}s in $op")
+            } else {
+                stalledFor = 0
+            }
+
+            // ---- path self-test: 60 fresh queries, how many replies come back ----
+            if (probeUntil == 0L && now - startedAt > 1500) {
+                probeQids.clear()
+                probeSent = 0
+                probeRecv = 0
+                for (i in 0 until 60) {
+                    val qid = 60000 + i
+                    val q = buildQuery(pollName(), qid)
+                    try {
+                        sock.send(DatagramPacket(q, q.size, resolver))
+                        probeQids.add(qid)
+                    } catch (e: Exception) {
+                        break
+                    }
+                }
+                probeUntil = now + 5000
             }
 
             // ---- stats + depth tuning every second ----
@@ -311,7 +388,7 @@ class Tunnel(
                 val up = (upBytes.get() - statUp) / dt
                 val dSent = sent.get() - statSent
                 val dLost = lost.get() - statLost
-                lastLoss = if (dSent > 0) 100.0 * dLost / dSent else 0.0
+                lastLoss = if (dSent > 0) min(100.0, 100.0 * dLost / dSent) else 0.0
                 onStats(
                     TunnelStats(
                         queriesPerSec = qps,
@@ -332,6 +409,11 @@ class Tunnel(
                         ownLoopDropped = ownLoopDropped.get(),
                         tunIdleReads = tunIdleReads.get(),
                         tunReads = tunReads.get(),
+                        tunWriteDropped = tunWriteDropped.get(),
+                        op = op,
+                        stalledFor = stalledFor,
+                        probeSent = probeSent,
+                        probeRecv = probeRecv,
                     )
                 )
                 statSent = sent.get()

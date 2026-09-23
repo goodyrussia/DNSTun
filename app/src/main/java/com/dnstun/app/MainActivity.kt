@@ -131,6 +131,10 @@ class MainActivity : Activity() {
             sb.append("   err send ").append(s.sendErrors).append(" / recv ").append(s.recvErrors)
             if (s.ownLoopDropped > 0) sb.append("   loop-dropped ").append(s.ownLoopDropped)
             sb.append("   tun pkts ").append(s.tunReads).append(" (idle ").append(s.tunIdleReads).append(")")
+            if (s.tunWriteDropped > 0) sb.append("   tun-drop ").append(s.tunWriteDropped)
+            sb.append("\nnow in: ").append(s.op)
+            if (s.stalledFor > 0) sb.append("   *** STALLED ").append(s.stalledFor).append("s ***")
+            if (s.probeSent > 0) sb.append("\npath test: ").append(s.probeRecv).append("/").append(s.probeSent).append(" replies")
             if (s.lastError.isNotEmpty()) sb.append("\n").append(s.lastError)
             status.text = sb.toString()
         } else {
