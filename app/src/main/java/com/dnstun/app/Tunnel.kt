@@ -265,43 +265,36 @@ class Tunnel(
      * VpnService.protect() genuinely works on it (it returns false on
      * channel-derived sockets on some devices).
      */
-    private fun openSocket(): DatagramSocket? {
-        val sock = try {
-            DatagramSocket()
+    private fun openSocket(): DatagramChannel? {
+        val ch = try {
+            DatagramChannel.open()
         } catch (e: Exception) {
             setError("socket: ${e.message}")
             return null
         }
-        protectOk = try {
-            protectSocket(sock)
-        } catch (e: Exception) {
-            setError("protect: ${e.message}")
-            false
-        }
-        // protect() only exempts the socket from the VPN - it does not choose a
-        // network. The carrier resolver (188.31.250.x) exists ONLY inside the
-        // mobile network, so if the phone is on wifi the queries go out of the
-        // wifi interface and vanish. Bind explicitly, and prefer cellular.
-        bindOk = try {
-            bindUnderlying(sock)
-        } catch (e: Exception) {
-            setError("bind: ${e.message}")
-            false
-        }
-        if (!bindOk && !protectOk) setError("protect() and bind() both failed - queries would loop into our own VPN")
-        // Big socket buffers: replies arrive in bursts of `depth` packets, and a
-        // small receive buffer silently discards most of them.
-        runCatching { sock.receiveBufferSize = 4 shl 20 }
-        runCatching { sock.sendBufferSize = 4 shl 20 }
-        runCatching { sock.soTimeout = 2 }
-        rcvBufSize = runCatching { sock.receiveBufferSize }.getOrDefault(-1)
-        sndBufSize = runCatching { sock.sendBufferSize }.getOrDefault(-1)
-        sockRef = sock
-        return sock
+        // Non-blocking is the whole point: a full kernel send buffer must never
+        // freeze the sender thread. Blocking send() on a black-holed network
+        // never returns, which silently killed the tunnel before.
+        runCatching { ch.configureBlocking(false) }
+        // Big buffers: replies arrive in bursts of `depth` packets and a small
+        // receive buffer discards most of them.
+        runCatching { ch.socket().receiveBufferSize = 4 shl 20 }
+        runCatching { ch.socket().sendBufferSize = 4 shl 20 }
+        rcvBufSize = runCatching { ch.socket().receiveBufferSize }.getOrDefault(-1)
+        sndBufSize = runCatching { ch.socket().sendBufferSize }.getOrDefault(-1)
+        // No protect() and no bind. The app excludes itself from its own VPN with
+        // addDisallowedApplication(), so its sockets follow the device's CURRENT
+        // network. protect() instead pins the socket to whatever network was
+        // default at connect time: move networks, or sit on a DNS-only bearer,
+        // and the socket black-holes while send() blocks forever.
+        protectOk = true
+        bindOk = true
+        channel = ch
+        return ch
     }
 
     private fun senderLoop() {
-        var sock = openSocket() ?: return
+        var ch = openSocket() ?: return
         sendEpoch = socketEpoch
         val resolver = try {
             InetSocketAddress(InetAddress.getByName(cfg.resolver), cfg.port)
@@ -323,12 +316,12 @@ class Tunnel(
             // network changed underneath us: rebuild the socket on the new one
             if (socketEpoch != sendEpoch) {
                 sendEpoch = socketEpoch
-                runCatching { sock.close() }
+                runCatching { ch.close() }
                 val fresh = openSocket()
                 if (fresh != null) {
-                    sock = fresh
+                    ch = fresh
                     inflight.clear()
-                    setError("network changed - tunnel socket rebound")
+                    setError("network changed - tunnel socket rebuilt")
                 }
             }
 
@@ -342,16 +335,17 @@ class Tunnel(
                 for (i in 0 until 60) {
                     val qid = 60000 + i
                     val q = buildQuery(pollName(), qid)
-                    try {
+                    val n = try {
                         op = "send"
-                        sock.send(DatagramPacket(q, q.size, resolver))
-                        inflight[qid] = now
-                        synchronized(probeLock) { probeQids.add(qid) }
-                        ok++
+                        ch.send(ByteBuffer.wrap(q), resolver)
                     } catch (e: Exception) {
                         sendErrors.incrementAndGet()
                         break
                     }
+                    if (n == 0) break
+                    inflight[qid] = now
+                    synchronized(probeLock) { probeQids.add(qid) }
+                    ok++
                 }
                 probeSent = ok
                 sent.addAndGet(ok.toLong())
@@ -366,18 +360,19 @@ class Tunnel(
                 val qid = rnd.nextInt(1, 65536)
                 if (inflight.containsKey(qid)) continue
                 val q = buildQuery(name, qid)
-                try {
-                    op = "send"
-                    sock.send(DatagramPacket(q, q.size, resolver))
-                    inflight[qid] = System.currentTimeMillis()
-                    lastSendAt = System.currentTimeMillis()
-                    sent.incrementAndGet()
-                    sentThisRound++
+                op = "send"
+                val n = try {
+                    ch.send(ByteBuffer.wrap(q), resolver)
                 } catch (e: Exception) {
                     sendErrors.incrementAndGet()
                     if (running.get()) setError("send: ${e.message}")
                     break
                 }
+                if (n == 0) break // kernel buffer full: retry next round, never block
+                inflight[qid] = System.currentTimeMillis()
+                lastSendAt = System.currentTimeMillis()
+                sent.incrementAndGet()
+                sentThisRound++
             }
 
             val idle = System.currentTimeMillis() - lastSendAt
@@ -387,22 +382,19 @@ class Tunnel(
     }
 
     private fun receiverLoop() {
-        val rcv = ByteArray(4096)
-        var sock = sockRef ?: return
+        val rcv = ByteBuffer.allocate(4096)
+        var ch = channel ?: return
         var epoch = socketEpoch
         while (running.get()) {
             if (epoch != socketEpoch) {
                 epoch = socketEpoch
                 Thread.sleep(50)
-                sock = sockRef ?: continue
+                ch = channel ?: continue
             }
-            val pkt = DatagramPacket(rcv, rcv.size)
-            try {
-                op = "recv"
-                sock.receive(pkt)
-            } catch (e: SocketTimeoutException) {
-                recvStalled = if (System.currentTimeMillis() - lastRecvAt > 3000) 1 else 0
-                continue
+            rcv.clear()
+            op = "recv"
+            val src = try {
+                ch.receive(rcv)
             } catch (e: Exception) {
                 if (running.get()) {
                     recvErrors.incrementAndGet()
@@ -411,18 +403,25 @@ class Tunnel(
                 Thread.sleep(5)
                 continue
             }
+            if (src == null) {
+                recvStalled = if (System.currentTimeMillis() - lastRecvAt > 3000) 1 else 0
+                Thread.sleep(1)
+                continue
+            }
+            val len = rcv.position()
+            val data = rcv.array()
             lastRecvAt = System.currentTimeMillis()
             lastReplyAt.set(lastRecvAt)
             recv.incrementAndGet()
-            if (pkt.length >= 2) {
-                val rqid = ((pkt.data[0].toInt() and 0xFF) shl 8) or (pkt.data[1].toInt() and 0xFF)
+            if (len >= 2) {
+                val rqid = ((data[0].toInt() and 0xFF) shl 8) or (data[1].toInt() and 0xFF)
                 if (probeUntil > 0) {
                     synchronized(probeLock) {
                         if (probeQids.remove(rqid)) probeRecv++
                     }
                 }
             }
-            handleResponse(pkt.data, pkt.length, inflight)
+            handleResponse(data, len, inflight)
         }
     }
 
