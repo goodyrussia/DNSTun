@@ -14,7 +14,7 @@ data class Config(
     val vip: String = "10.78.0.2",
     val mtu: Int = 600,
     val edns: Int = 1300,
-    val startDepth: Int = 64,
+    val startDepth: Int = 128,
     val minDepth: Int = 16,
     val maxDepth: Int = 256,
 ) {

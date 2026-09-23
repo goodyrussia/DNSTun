@@ -221,8 +221,8 @@ class Tunnel(
                 if (now - lastAdapt >= 2000) {
                     lastAdapt = now
                     when {
-                        lastLoss < 0.5 && depth < cfg.maxDepth -> depth += 16
-                        lastLoss > 2.0 && depth > cfg.minDepth -> depth -= 16
+                        lastLoss < 4.0 && depth < cfg.maxDepth -> depth += 16
+                        lastLoss > 8.0 && depth > cfg.minDepth -> depth -= 16
                     }
                     if (depth < cfg.minDepth) depth = cfg.minDepth
                     if (depth > cfg.maxDepth) depth = cfg.maxDepth
