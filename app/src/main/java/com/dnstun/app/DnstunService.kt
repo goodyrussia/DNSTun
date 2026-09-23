@@ -119,6 +119,7 @@ class DnstunService : VpnService() {
             "-listen", "127.0.0.1:${cfg.socksPort}",
             "-max-qname-len", cfg.maxQnameLen.toString(),
             "-keepalive", "2s",
+            "-kcp-window-size", "128",
             "-idle-timeout", "10s",
             "-log-level", "info",
         )

@@ -13,7 +13,7 @@ data class Config(
     val port: Int = 53,
     val zone: String = "v.techychi.com",
     /** public key of the vaydns-server; not a secret, safe to ship as default */
-    val pubkey: String = "ad79ca89c27706c7eb3683cca64001146bef1e46bdecc67c39a8bf7e42442c22",
+    val pubkey: String = "580cd814cbd65bd8e5b2613213ffab5827433e5fdc34990727df5c8d68cd7545",
     val socksPort: Int = 7300,
     /** max DNS query-name length; the carrier resolver here allows ~253 */
     val maxQnameLen: Int = 250,
