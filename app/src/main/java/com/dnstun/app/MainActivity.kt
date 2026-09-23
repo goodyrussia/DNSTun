@@ -126,12 +126,12 @@ class MainActivity : Activity() {
                 s.sent, s.recv,
                 if (s.lastReplyAgoMs < 0) "never" else "${s.lastReplyAgoMs / 1000}s ago"
             )
-            val diag = StringBuilder()
-            diag.append("protect ").append(if (s.protectOk) "ok" else "FAILED")
-            diag.append("   err send ").append(s.sendErrors).append(" / recv ").append(s.recvErrors)
-            if (s.ownLoopDropped > 0) diag.append("   loop-dropped ").append(s.ownLoopDropped)
-            if (s.lastError.isNotEmpty()) diag.append("\n").append(s.lastError)
-            status.append("\n").append(diag)
+            val sb = StringBuilder(status.text)
+            sb.append("\nprotect ").append(if (s.protectOk) "ok" else "FAILED")
+            sb.append("   err send ").append(s.sendErrors).append(" / recv ").append(s.recvErrors)
+            if (s.ownLoopDropped > 0) sb.append("   loop-dropped ").append(s.ownLoopDropped)
+            if (s.lastError.isNotEmpty()) sb.append("\n").append(s.lastError)
+            status.text = sb.toString()
         } else {
             button.text = "Connect"
             status.text = "disconnected"
