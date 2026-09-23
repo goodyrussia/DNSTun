@@ -21,8 +21,8 @@ private const val TAG = "DNSTun"
 /** Max payload bytes we can pack into one query name (253 char DNS limit). */
 private const val MAX_CHUNK = 140
 
-/** base32("\u0000\u0000\u0000") - a poll query, no upstream data. */
-private const val POLL_NAME = "aaaaaa"
+/** Poll queries carry 4 unique bytes so a resolver can never serve a cached reply. */
+private val POLL_RND = java.util.Random(System.nanoTime())
 
 private const val FLAG_MORE = 1
 
@@ -150,7 +150,7 @@ class Tunnel(
             var guard = 0
             while (inflight.size < depth && guard++ < 512) {
                 val chunk = synchronized(queueLock) { queue.removeFirstOrNull() }
-                val name = if (chunk != null) encodeName(chunk) else "$POLL_NAME.${cfg.sid}.${cfg.zone}"
+                val name = if (chunk != null) encodeName(chunk) else pollName()
                 val qid = rnd.nextInt(1, 65536)
                 val q = buildQuery(name, qid)
                 try {
@@ -234,6 +234,18 @@ class Tunnel(
     }
 
     // ------------------------------------------------------- wire format
+
+    /**
+     * Poll query with fresh random bytes. Resolvers cache answers to repeated
+     * names - even TTL=0 ones - so a constant poll name would make every reply
+     * after the first come back empty.
+     */
+    private fun pollName(): String {
+        val b = ByteArray(4)
+        POLL_RND.nextBytes(b)
+        b[3] = 0
+        return encodeName(b)
+    }
 
     /** 4 byte header (fragId, idx, flags) + payload, base32, split into labels. */
     private fun encodeName(chunk: ByteArray): String {
