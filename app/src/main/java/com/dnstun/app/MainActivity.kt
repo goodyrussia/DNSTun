@@ -130,6 +130,7 @@ class MainActivity : Activity() {
             sb.append("\nprotect ").append(if (s.protectOk) "ok" else if (s.bindOk) "no, bound to network instead" else "FAILED")
             sb.append("   err send ").append(s.sendErrors).append(" / recv ").append(s.recvErrors)
             if (s.ownLoopDropped > 0) sb.append("   loop-dropped ").append(s.ownLoopDropped)
+            sb.append("   tun idle ").append(s.tunIdleReads)
             if (s.lastError.isNotEmpty()) sb.append("\n").append(s.lastError)
             status.text = sb.toString()
         } else {

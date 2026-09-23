@@ -61,6 +61,7 @@ class Tunnel(
     @Volatile private var lastError = ""
     private var resolverIp = 0
     private val ownLoopDropped = AtomicLong()
+    private val tunIdleReads = AtomicLong()
     private var tunOut: FileOutputStream? = null
     private var fragCounter = 0
     private var depth = cfg.startDepth
@@ -97,10 +98,27 @@ class Tunnel(
             val n = try {
                 input.read(buf)
             } catch (e: Exception) {
-                if (running.get()) Log.w(TAG, "tun read: ${e.message}")
+                // Android 14+ hands out a NON-BLOCKING tun fd (setBlocking(true) is
+                // ignored), so an idle read throws EAGAIN / "Try again". That is the
+                // normal empty-queue case, not an error - treating it as fatal kills
+                // the reader thread on the first idle moment and the tunnel then
+                // never carries a single upstream packet.
+                val msg = e.message ?: ""
+                if (e is java.io.InterruptedIOException || msg.contains("Try again") ||
+                    msg.contains("EAGAIN") || msg.contains("would block")
+                ) {
+                    tunIdleReads.incrementAndGet()
+                    Thread.sleep(1)
+                    continue
+                }
+                if (running.get()) setError("tun read: $msg")
                 break
             }
-            if (n <= 0) continue
+            if (n <= 0) {
+                tunIdleReads.incrementAndGet()
+                Thread.sleep(1)
+                continue
+            }
             // Safety net: if protect() ever fails, our own queries would be routed
             // back into our own VPN and loop forever. Never re-tunnel them.
             if (isOwnTunnelPacket(buf, n)) {
@@ -296,6 +314,7 @@ class Tunnel(
                         recvErrors = recvErrors.get(),
                         lastError = lastError,
                         ownLoopDropped = ownLoopDropped.get(),
+                        tunIdleReads = tunIdleReads.get(),
                     )
                 )
                 statSent = sent.get()

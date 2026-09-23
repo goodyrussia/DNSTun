@@ -71,4 +71,6 @@ data class TunnelStats(
     val recvErrors: Long = 0,
     val lastError: String = "",
     val ownLoopDropped: Long = 0,
+    /** reads that found nothing waiting (a non-blocking tun fd is normal) */
+    val tunIdleReads: Long = 0,
 )
