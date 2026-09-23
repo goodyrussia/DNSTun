@@ -16,7 +16,9 @@ data class Config(
     val edns: Int = 1300,
     val startDepth: Int = 128,
     val minDepth: Int = 16,
-    val maxDepth: Int = 256,
+    /** Sweep-proven: 128 gives 440 replies/s, 192 drops to 118/s with
+     *  21% loss, 256 collapses to 7/s. Never climb past 160. */
+    val maxDepth: Int = 160,
     /** Upstream bytes per query. Sweep-proven on the Smarty resolver:
      *  120 bytes -> 224-char dotted name / 226 wire, accepted.
      *  140 bytes -> 258 wire, EXCEEDS the 255-byte DNS wire limit and is

@@ -19,6 +19,7 @@ class MainActivity : Activity() {
     private lateinit var zone: EditText
     private lateinit var sid: EditText
     private lateinit var mtu: EditText
+    private lateinit var maxChunk: android.widget.EditText
     private lateinit var depth: EditText
 
     private val handler = Handler(Looper.getMainLooper())
