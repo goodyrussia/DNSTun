@@ -66,27 +66,39 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:text="Server public key"
+            android:text="Session id"
             android:textStyle="bold" />
 
         <EditText
-            android:id="@+id/pubkey"
+            android:id="@+id/sid"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:inputType="text"
-            android:fontFamily="monospace"
-            android:textSize="12sp"
             android:autofillHints="none" />
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:text="Max query-name length (bigger = faster, 250 works here)"
+            android:text="MTU (smaller packs better, 600 is good)"
             android:textStyle="bold" />
 
         <EditText
-            android:id="@+id/qname"
+            android:id="@+id/mtu"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="number"
+            android:autofillHints="none" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="Queries in flight (speed knob)"
+            android:textStyle="bold" />
+
+        <EditText
+            android:id="@+id/depth"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:inputType="number"
@@ -97,7 +109,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
             android:textSize="12sp"
-            android:text="Settings are saved when you press Connect." />
+            android:text="Settings are saved when you press Connect. Changing the resolver needs a reconnect." />
 
     </LinearLayout>
 </ScrollView>
