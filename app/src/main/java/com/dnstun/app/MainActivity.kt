@@ -33,6 +33,17 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        // targetSdk 37 forces edge-to-edge: keep the readout clear of the status bar
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            val root = findViewById<android.view.View>(R.id.root)
+            val base = (20 * resources.displayMetrics.density).toInt()
+            root.setOnApplyWindowInsetsListener { v, insets ->
+                val b = insets.getInsets(android.view.WindowInsets.Type.systemBars())
+                v.setPadding(base + b.left, base + b.top, base + b.right, base + b.bottom)
+                insets
+            }
+        }
+
         status = findViewById(R.id.status)
         button = findViewById(R.id.connect)
         resolver = findViewById(R.id.resolver)
@@ -108,10 +119,12 @@ class MainActivity : Activity() {
         if (DnstunService.running) {
             button.text = "Disconnect"
             status.text = String.format(
-                "connected\ndepth %d   %.0f q/s   loss %.1f%%\n%.1f KB/s down   %.1f KB/s up\ntotal %.1f MB down / %.1f MB up",
+                "connected\ndepth %d   %.0f q/s   loss %.1f%%\n%.1f KB/s down   %.1f KB/s up\ntotal %.1f MB down / %.1f MB up\nsent %d   recv %d\nlast reply %s",
                 s.depth, s.queriesPerSec, s.lossPercent,
                 s.downKBps, s.upKBps,
-                s.downBytes / 1048576.0, s.upBytes / 1048576.0
+                s.downBytes / 1048576.0, s.upBytes / 1048576.0,
+                s.sent, s.recv,
+                if (s.lastReplyAgoMs < 0) "never" else "${s.lastReplyAgoMs / 1000}s ago"
             )
         } else {
             button.text = "Connect"

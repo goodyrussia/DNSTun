@@ -174,6 +174,7 @@ class Tunnel(
                 } ?: break
                 got = true
                 recv.incrementAndGet()
+                lastReplyAt.set(nowMs())
                 rcv.flip()
                 val len = rcv.remaining()
                 val data = ByteArray(len)
@@ -208,6 +209,9 @@ class Tunnel(
                         depth = depth,
                         upBytes = upBytes.get(),
                         downBytes = downBytes.get(),
+                        sent = sent.get(),
+                        recv = recv.get(),
+                        lastReplyAgoMs = if (lastReplyAt.get() == 0L) -1L else now - lastReplyAt.get(),
                     )
                 )
                 statSent = sent.get()
@@ -240,6 +244,8 @@ class Tunnel(
      * names - even TTL=0 ones - so a constant poll name would make every reply
      * after the first come back empty.
      */
+    private fun nowMs() = System.currentTimeMillis()
+
     private fun pollName(): String {
         val b = ByteArray(4)
         POLL_RND.nextBytes(b)
@@ -307,6 +313,9 @@ class Tunnel(
             off += total
         }
     }
+
+    /** wall clock of the last reply we processed (0 = none yet) */
+    private val lastReplyAt = java.util.concurrent.atomic.AtomicLong(0)
 
     private var recvOk = 0L
     private var badQid = 0L

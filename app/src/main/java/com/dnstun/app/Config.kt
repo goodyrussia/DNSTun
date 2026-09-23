@@ -61,4 +61,8 @@ data class TunnelStats(
     val depth: Int = 0,
     val upBytes: Long = 0,
     val downBytes: Long = 0,
+    val sent: Long = 0,
+    val recv: Long = 0,
+    /** ms since the last reply arrived; -1 = never */
+    val lastReplyAgoMs: Long = -1,
 )
