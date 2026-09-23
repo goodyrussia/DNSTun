@@ -29,8 +29,24 @@ jobs:
           java-version: "26"
           cache: gradle
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Point Gradle at the preinstalled Android SDK
+        run: |
+          set -e
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "sdk.dir=$SDK" > local.properties
+          echo "sdk.dir=$SDK" > app/local.properties
+          SDKMGR=$(ls -d "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | tail -1)
+          echo "sdkmanager: $SDKMGR"
+          if [ -n "$SDKMGR" ]; then
+            yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
+            "$SDKMGR" "platform-tools" > /dev/null 2>&1 || true
+            "$SDKMGR" "platforms;android-37" > /dev/null 2>&1 || true
+            "$SDKMGR" "build-tools;36.0.0" > /dev/null 2>&1 || true
+          fi
+          ls "$SDK/platforms" || true
+          ls "$SDK/build-tools" || true
 
       - name: Build release APK
         env:
