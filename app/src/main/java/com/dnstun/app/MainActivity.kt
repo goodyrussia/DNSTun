@@ -127,7 +127,7 @@ class MainActivity : Activity() {
                 if (s.lastReplyAgoMs < 0) "never" else "${s.lastReplyAgoMs / 1000}s ago"
             )
             val sb = StringBuilder(status.text)
-            sb.append("\nprotect ").append(if (s.protectOk) "ok" else "FAILED")
+            sb.append("\nprotect ").append(if (s.protectOk) "ok" else if (s.bindOk) "no, bound to network instead" else "FAILED")
             sb.append("   err send ").append(s.sendErrors).append(" / recv ").append(s.recvErrors)
             if (s.ownLoopDropped > 0) sb.append("   loop-dropped ").append(s.ownLoopDropped)
             if (s.lastError.isNotEmpty()) sb.append("\n").append(s.lastError)

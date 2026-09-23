@@ -37,6 +37,7 @@ class Tunnel(
     private val cfg: Config,
     private val tun: ParcelFileDescriptor,
     private val protectSocket: (DatagramSocket) -> Boolean,
+    private val bindUnderlying: (DatagramSocket) -> Boolean,
     private val onStats: (TunnelStats) -> Unit,
 ) {
     private val running = AtomicBoolean(false)
@@ -52,6 +53,7 @@ class Tunnel(
     private var channel: DatagramChannel? = null
     private var sockRef: DatagramSocket? = null
     @Volatile private var protectOk = false
+    @Volatile private var bindOk = false
     private val sendErrors = AtomicLong()
     private val recvErrors = AtomicLong()
     @Volatile private var lastError = ""
@@ -169,8 +171,24 @@ class Tunnel(
             setError("socket: ${e.message}")
             return
         }
-        protectOk = protectSocket(sock)
-        if (!protectOk) setError("protect() failed - tunnel queries would be captured by our own VPN")
+        protectOk = try {
+            protectSocket(sock)
+        } catch (e: Exception) {
+            setError("protect: ${e.message}")
+            false
+        }
+        if (!protectOk) {
+            // protect() returns false on some devices/versions. Binding the socket
+            // to the real underlying network has the same effect: our queries
+            // leave via mobile data instead of being captured by our own VPN.
+            bindOk = try {
+                bindUnderlying(sock)
+            } catch (e: Exception) {
+                setError("bind: ${e.message}")
+                false
+            }
+            if (!bindOk) setError("protect() and bind() both failed - queries would loop into our own VPN")
+        }
         val ch = try {
             sock.channel
         } catch (e: Exception) {
@@ -274,6 +292,7 @@ class Tunnel(
                         recv = recv.get(),
                         lastReplyAgoMs = if (lastReplyAt.get() == 0L) -1L else now - lastReplyAt.get(),
                         protectOk = protectOk,
+                        bindOk = bindOk,
                         sendErrors = sendErrors.get(),
                         recvErrors = recvErrors.get(),
                         lastError = lastError,

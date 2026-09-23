@@ -5,8 +5,12 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
+import java.net.DatagramSocket
 import android.os.ParcelFileDescriptor
 import android.util.Log
 
@@ -71,12 +75,40 @@ class DnstunService : VpnService() {
         }
         pfd = fd
 
-        val t = Tunnel(cfg, fd, { protect(it) }) { st -> lastStats = st }
+        val t = Tunnel(cfg, fd, { protect(it) }, { bindUnderlying(it) }) { st -> lastStats = st }
         tunnel = t
         running = true
         t.start()
 
         startForeground(1, buildNotification(cfg))
+    }
+
+    /**
+     * Bind a socket to the real (non-VPN) network. Used when VpnService.protect()
+     * returns false, which happens on some Android builds - without one of the
+     * two, the app's own DNS queries get captured by its own VPN and loop.
+     */
+    private fun bindUnderlying(sock: DatagramSocket): Boolean {
+        val cm = getSystemService(ConnectivityManager::class.java) ?: return false
+        val candidates = ArrayList<Network>()
+        for (n in cm.allNetworks) {
+            val caps = cm.getNetworkCapabilities(n) ?: continue
+            if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) continue
+            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) continue
+            // the carrier resolver only answers from inside the mobile network
+            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) candidates.add(0, n)
+            else candidates.add(n)
+        }
+        for (n in candidates) {
+            try {
+                n.bindSocket(sock)
+                Log.i("DNSTun", "bound tunnel socket to underlying network $n")
+                return true
+            } catch (e: Exception) {
+                Log.w("DNSTun", "bindSocket($n): ${e.message}")
+            }
+        }
+        return false
     }
 
     private fun stopTunnel() {

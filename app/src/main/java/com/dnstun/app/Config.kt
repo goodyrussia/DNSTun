@@ -66,6 +66,7 @@ data class TunnelStats(
     /** ms since the last reply arrived; -1 = never */
     val lastReplyAgoMs: Long = -1,
     val protectOk: Boolean = false,
+    val bindOk: Boolean = false,
     val sendErrors: Long = 0,
     val recvErrors: Long = 0,
     val lastError: String = "",
