@@ -17,9 +17,11 @@ data class Config(
     val startDepth: Int = 128,
     val minDepth: Int = 16,
     val maxDepth: Int = 256,
-    /** upstream bytes per query; raise only if a length sweep proves the
-     *  resolver accepts longer names (48 -> ~106-char qname, known safe) */
-    val maxChunk: Int = 48,
+    /** Upstream bytes per query. Sweep-proven on the Smarty resolver:
+     *  120 bytes -> 224-char dotted name / 226 wire, accepted.
+     *  140 bytes -> 258 wire, EXCEEDS the 255-byte DNS wire limit and is
+     *  rejected as malformed. 120 is the practical maximum. */
+    val maxChunk: Int = 120,
 ) {
     companion object {
         private const val PREFS = "dnstun"

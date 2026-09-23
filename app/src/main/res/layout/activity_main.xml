@@ -105,6 +105,20 @@
             android:autofillHints="none" />
 
         <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="Max chunk (upstream bytes/query, 120 = max)"
+            android:textStyle="bold" />
+
+        <EditText
+            android:id="@+id/maxchunk"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="number"
+            android:autofillHints="none" />
+
+        <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"

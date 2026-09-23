@@ -51,6 +51,7 @@ class MainActivity : Activity() {
         sid = findViewById(R.id.sid)
         mtu = findViewById(R.id.mtu)
         depth = findViewById(R.id.depth)
+        maxChunk = findViewById(R.id.maxchunk)
 
         val cfg = Config.load(this)
         resolver.setText(cfg.resolver)
@@ -58,6 +59,7 @@ class MainActivity : Activity() {
         sid.setText(cfg.sid)
         mtu.setText(cfg.mtu.toString())
         depth.setText(cfg.startDepth.toString())
+        maxChunk.setText(cfg.maxChunk.toString())
 
         button.setOnClickListener {
             if (DnstunService.running) stop() else start()
@@ -82,6 +84,7 @@ class MainActivity : Activity() {
             sid = sid.text.toString().trim().ifEmpty { d.sid },
             mtu = mtu.text.toString().trim().toIntOrNull() ?: d.mtu,
             startDepth = depth.text.toString().trim().toIntOrNull() ?: d.startDepth,
+            maxChunk = maxChunk.text.toString().trim().toIntOrNull() ?: d.maxChunk,
         )
     }
 
