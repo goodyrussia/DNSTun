@@ -53,6 +53,9 @@ android {
         // we execute libvaydns.so as a process, so it must exist in
         // nativeLibraryDir as a real file (Android 10+ forbids exec from data dir).
         jniLibs.useLegacyPackaging = true
+        // libvaydns.so is a Go executable, not a shared library - AGP's strip
+        // task would corrupt it.
+        jniLibs.keepDebugSymbols += "**/libvaydns.so"
         resources.excludes += setOf("META-INF/*.kotlin_module")
     }
 }
