@@ -63,33 +63,10 @@ data class Config(
 }
 
 data class TunnelStats(
-    val queriesPerSec: Double = 0.0,
-    val downKBps: Double = 0.0,
-    val upKBps: Double = 0.0,
-    val lossPercent: Double = 0.0,
-    val depth: Int = 0,
-    val upBytes: Long = 0,
-    val downBytes: Long = 0,
-    val sent: Long = 0,
-    val recv: Long = 0,
-    /** ms since the last reply arrived; -1 = never */
-    val lastReplyAgoMs: Long = -1,
-    val protectOk: Boolean = false,
-    val bindOk: Boolean = false,
-    val sendErrors: Long = 0,
-    val recvErrors: Long = 0,
-    val lastError: String = "",
-    val ownLoopDropped: Long = 0,
-    /** reads that found nothing waiting (a non-blocking tun fd is normal) */
-    val tunIdleReads: Long = 0,
-    /** packets read out of the tun (0 = nothing is being captured) */
-    val tunReads: Long = 0,
-    val tunWriteDropped: Long = 0,
-    /** the call the udp loop is inside right now */
-    val op: String = "",
-    val stalledFor: Long = 0,
-    val probeSent: Int = 0,
-    val probeRecv: Int = 0,
-    val upQueued: Int = 0,
-    val inflight: Int = 0,
+    val state: String = "disconnected",
+    val text: String = "",
+    val txBytes: Long = 0,
+    val rxBytes: Long = 0,
+    val upMB: Double = 0.0,
+    val downMB: Double = 0.0,
 )
