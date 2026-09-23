@@ -77,10 +77,39 @@ class DnstunService : VpnService() {
 
         val t = Tunnel(cfg, fd, { protect(it) }, { bindUnderlying(it) }) { st -> lastStats = st }
         tunnel = t
+        registerNetworkWatch()
         running = true
         t.start()
 
         startForeground(1, buildNotification(cfg))
+    }
+
+    private var netCallback: ConnectivityManager.NetworkCallback? = null
+
+    /**
+     * The tunnel socket is bound to one specific network. When the phone moves
+     * between wifi and mobile data that socket is useless, so the tunnel has to
+     * rebuild it - otherwise queries silently disappear.
+     */
+    private fun registerNetworkWatch() {
+        val cm = getSystemService(ConnectivityManager::class.java) ?: return
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                tunnel?.onNetworkChanged()
+            }
+
+            override fun onLost(network: Network) {
+                tunnel?.onNetworkChanged()
+            }
+        }
+        netCallback = cb
+        runCatching { cm.registerDefaultNetworkCallback(cb) }
+    }
+
+    private fun unregisterNetworkWatch() {
+        val cm = getSystemService(ConnectivityManager::class.java)
+        netCallback?.let { runCatching { cm?.unregisterNetworkCallback(it) } }
+        netCallback = null
     }
 
     /**
@@ -112,6 +141,7 @@ class DnstunService : VpnService() {
     }
 
     private fun stopTunnel() {
+        unregisterNetworkWatch()
         tunnel?.stop()
         tunnel = null
         runCatching { pfd?.close() }

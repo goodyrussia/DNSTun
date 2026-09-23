@@ -69,6 +69,8 @@ class Tunnel(
     @Volatile private var lastRecvAt = 0L
     private val probeLock = Object()
     @Volatile private var rcvBufSize = -1
+    @Volatile private var socketEpoch = 0
+    private var sendEpoch = -1
     @Volatile private var sndBufSize = -1
     private val ownLoopDropped = AtomicLong()
     private val tunIdleReads = AtomicLong()
@@ -102,6 +104,12 @@ class Tunnel(
         thread(name = "dnstun-send") { senderLoop() }
         thread(name = "dnstun-recv") { receiverLoop() }
         thread(name = "dnstun-stat") { statsLoop() }
+    }
+
+    /** Called when the device's underlying network changes: the tunnel socket is
+     *  bound to a specific network, so it has to be rebuilt on the new one. */
+    fun onNetworkChanged() {
+        socketEpoch++
     }
 
     fun stop() {
@@ -270,15 +278,17 @@ class Tunnel(
             setError("protect: ${e.message}")
             false
         }
-        if (!protectOk) {
-            bindOk = try {
-                bindUnderlying(sock)
-            } catch (e: Exception) {
-                setError("bind: ${e.message}")
-                false
-            }
-            if (!bindOk) setError("protect() and bind() both failed - queries would loop into our own VPN")
+        // protect() only exempts the socket from the VPN - it does not choose a
+        // network. The carrier resolver (188.31.250.x) exists ONLY inside the
+        // mobile network, so if the phone is on wifi the queries go out of the
+        // wifi interface and vanish. Bind explicitly, and prefer cellular.
+        bindOk = try {
+            bindUnderlying(sock)
+        } catch (e: Exception) {
+            setError("bind: ${e.message}")
+            false
         }
+        if (!bindOk && !protectOk) setError("protect() and bind() both failed - queries would loop into our own VPN")
         // Big socket buffers: replies arrive in bursts of `depth` packets, and a
         // small receive buffer silently discards most of them.
         runCatching { sock.receiveBufferSize = 4 shl 20 }
@@ -291,7 +301,8 @@ class Tunnel(
     }
 
     private fun senderLoop() {
-        val sock = openSocket() ?: return
+        var sock = openSocket() ?: return
+        sendEpoch = socketEpoch
         val resolver = try {
             InetSocketAddress(InetAddress.getByName(cfg.resolver), cfg.port)
         } catch (e: Exception) {
@@ -308,6 +319,18 @@ class Tunnel(
 
         while (running.get()) {
             val now = System.currentTimeMillis()
+
+            // network changed underneath us: rebuild the socket on the new one
+            if (socketEpoch != sendEpoch) {
+                sendEpoch = socketEpoch
+                runCatching { sock.close() }
+                val fresh = openSocket()
+                if (fresh != null) {
+                    sock = fresh
+                    inflight.clear()
+                    setError("network changed - tunnel socket rebound")
+                }
+            }
 
             // one-shot path self-test: 60 fresh queries, count the replies
             if (!probeDone && now - startedAt > 1500) {
@@ -364,9 +387,15 @@ class Tunnel(
     }
 
     private fun receiverLoop() {
-        val sock = sockRef ?: return
         val rcv = ByteArray(4096)
+        var sock = sockRef ?: return
+        var epoch = socketEpoch
         while (running.get()) {
+            if (epoch != socketEpoch) {
+                epoch = socketEpoch
+                Thread.sleep(50)
+                sock = sockRef ?: continue
+            }
             val pkt = DatagramPacket(rcv, rcv.size)
             try {
                 op = "recv"
