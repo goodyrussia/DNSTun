@@ -18,9 +18,7 @@ class MainActivity : Activity() {
     private lateinit var resolver: EditText
     private lateinit var zone: EditText
     private lateinit var sid: EditText
-    private lateinit var mtu: EditText
-    private lateinit var maxChunk: android.widget.EditText
-    private lateinit var depth: EditText
+    private lateinit var chunk: EditText
 
     private val handler = Handler(Looper.getMainLooper())
     private val ticker = object : Runnable {
@@ -50,17 +48,13 @@ class MainActivity : Activity() {
         resolver = findViewById(R.id.resolver)
         zone = findViewById(R.id.zone)
         sid = findViewById(R.id.sid)
-        mtu = findViewById(R.id.mtu)
-        depth = findViewById(R.id.depth)
-        maxChunk = findViewById(R.id.maxchunk)
+        chunk = findViewById(R.id.chunk)
 
         val cfg = Config.load(this)
         resolver.setText(cfg.resolver)
         zone.setText(cfg.zone)
         sid.setText(cfg.sid)
-        mtu.setText(cfg.mtu.toString())
-        depth.setText(cfg.startDepth.toString())
-        maxChunk.setText(cfg.maxChunk.toString())
+        chunk.setText(cfg.maxChunk.toString())
 
         button.setOnClickListener {
             if (DnstunService.running) stop() else start()
@@ -82,15 +76,14 @@ class MainActivity : Activity() {
         return Config(
             resolver = resolver.text.toString().trim().ifEmpty { d.resolver },
             zone = zone.text.toString().trim().ifEmpty { d.zone },
-            sid = sid.text.toString().trim().ifEmpty { d.sid },
-            mtu = mtu.text.toString().trim().toIntOrNull() ?: d.mtu,
-            startDepth = depth.text.toString().trim().toIntOrNull() ?: d.startDepth,
-            maxChunk = maxChunk.text.toString().trim().toIntOrNull() ?: d.maxChunk,
+            sid = sid.text.toString().trim(),
+            maxChunk = chunk.text.toString().trim().toIntOrNull() ?: d.maxChunk,
         )
     }
 
     private fun start() {
-        Config.save(this, currentConfig())
+        val c = currentConfig()
+        Config.save(this, c)
         val prep = VpnService.prepare(this)
         if (prep != null) {
             startActivityForResult(prep, 1)
@@ -106,7 +99,9 @@ class MainActivity : Activity() {
     }
 
     private fun go() {
-        startForegroundServiceCompat(Intent(this, DnstunService::class.java).setAction(DnstunService.ACTION_START))
+        startForegroundServiceCompat(
+            Intent(this, DnstunService::class.java).setAction(DnstunService.ACTION_START)
+        )
     }
 
     private fun stop() {
@@ -123,28 +118,12 @@ class MainActivity : Activity() {
         if (DnstunService.running) {
             button.text = "Disconnect"
             status.text = String.format(
-                "connected\ndepth %d   %.0f q/s   loss %.1f%%\n%.1f KB/s down   %.1f KB/s up\ntotal %.1f MB down / %.1f MB up\nsent %d   recv %d\nlast reply %s",
-                s.depth, s.queriesPerSec, s.lossPercent,
-                s.downKBps, s.upKBps,
-                s.downBytes / 1048576.0, s.upBytes / 1048576.0,
-                s.sent, s.recv,
-                if (s.lastReplyAgoMs < 0) "never" else "${s.lastReplyAgoMs / 1000}s ago"
+                "%s\n%.2f MB down   %.2f MB up\ntx %d B   rx %d B\n%s",
+                s.state, s.downMB, s.upMB, s.txBytes, s.rxBytes, s.text
             )
-            val sb = StringBuilder(status.text)
-            sb.append("\nprotect ").append(if (s.protectOk) "ok" else if (s.bindOk) "no, bound to network instead" else "FAILED")
-            sb.append("   err send ").append(s.sendErrors).append(" / recv ").append(s.recvErrors)
-            if (s.ownLoopDropped > 0) sb.append("   loop-dropped ").append(s.ownLoopDropped)
-            sb.append("   tun pkts ").append(s.tunReads).append(" (idle ").append(s.tunIdleReads).append(")")
-            if (s.tunWriteDropped > 0) sb.append("   tun-drop ").append(s.tunWriteDropped)
-            sb.append("\nnow in: ").append(s.op)
-            if (s.stalledFor > 0) sb.append("   *** STALLED ").append(s.stalledFor).append("s ***")
-            if (s.probeSent > 0) sb.append("\npath test: ").append(s.probeRecv).append("/").append(s.probeSent).append(" replies")
-            sb.append("\nqueue ").append(s.upQueued).append("   inflight ").append(s.inflight).append("/").append(s.depth)
-            if (s.lastError.isNotEmpty()) sb.append("\n").append(s.lastError)
-            status.text = sb.toString()
         } else {
             button.text = "Connect"
-            status.text = "disconnected"
+            status.text = if (s.state == "error") "error\n${s.text}" else "disconnected"
         }
     }
 }
