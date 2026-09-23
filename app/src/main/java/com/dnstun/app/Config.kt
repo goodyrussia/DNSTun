@@ -69,4 +69,5 @@ data class TunnelStats(
     val sendErrors: Long = 0,
     val recvErrors: Long = 0,
     val lastError: String = "",
+    val ownLoopDropped: Long = 0,
 )

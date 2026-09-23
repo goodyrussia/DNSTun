@@ -55,6 +55,8 @@ class Tunnel(
     private val sendErrors = AtomicLong()
     private val recvErrors = AtomicLong()
     @Volatile private var lastError = ""
+    private var resolverIp = 0
+    private val ownLoopDropped = AtomicLong()
     private var tunOut: FileOutputStream? = null
     private var fragCounter = 0
     private var depth = cfg.startDepth
@@ -95,9 +97,33 @@ class Tunnel(
                 break
             }
             if (n <= 0) continue
+            // Safety net: if protect() ever fails, our own queries would be routed
+            // back into our own VPN and loop forever. Never re-tunnel them.
+            if (isOwnTunnelPacket(buf, n)) {
+                ownLoopDropped.incrementAndGet()
+                continue
+            }
             upBytes.addAndGet(n.toLong())
             fragment(buf, n)
         }
+    }
+
+    private fun ipToInt(a: InetAddress): Int {
+        val b = a.address
+        return ((b[0].toInt() and 0xFF) shl 24) or ((b[1].toInt() and 0xFF) shl 16) or
+            ((b[2].toInt() and 0xFF) shl 8) or (b[3].toInt() and 0xFF)
+    }
+
+    /** true if this TUN packet is our own UDP query heading for the resolver */
+    private fun isOwnTunnelPacket(p: ByteArray, n: Int): Boolean {
+        if (resolverIp == 0 || n < 28) return false
+        if ((p[0].toInt() and 0xF0) != 0x40) return false
+        if ((p[9].toInt() and 0xFF) != 17) return false
+        val dst = ((p[16].toInt() and 0xFF) shl 24) or ((p[17].toInt() and 0xFF) shl 16) or
+            ((p[18].toInt() and 0xFF) shl 8) or (p[19].toInt() and 0xFF)
+        if (dst != resolverIp) return false
+        val dport = ((p[22].toInt() and 0xFF) shl 8) or (p[23].toInt() and 0xFF)
+        return dport == cfg.port
     }
 
     private fun fragment(pkt: ByteArray, n: Int) {
@@ -163,6 +189,7 @@ class Tunnel(
             setError("resolver ${cfg.resolver}: ${e.message}")
             return
         }
+        resolverIp = ipToInt(resolver.address)
         val rnd = Random(System.nanoTime())
         val inflight = HashMap<Int, Long>()
         val rcv = ByteBuffer.allocate(4096)
@@ -250,6 +277,7 @@ class Tunnel(
                         sendErrors = sendErrors.get(),
                         recvErrors = recvErrors.get(),
                         lastError = lastError,
+                        ownLoopDropped = ownLoopDropped.get(),
                     )
                 )
                 statSent = sent.get()

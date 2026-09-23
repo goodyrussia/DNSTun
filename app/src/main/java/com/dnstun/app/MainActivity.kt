@@ -129,6 +129,7 @@ class MainActivity : Activity() {
             val diag = StringBuilder()
             diag.append("protect ").append(if (s.protectOk) "ok" else "FAILED")
             diag.append("   err send ").append(s.sendErrors).append(" / recv ").append(s.recvErrors)
+            if (s.ownLoopDropped > 0) diag.append("   loop-dropped ").append(s.ownLoopDropped)
             if (s.lastError.isNotEmpty()) diag.append("\n").append(s.lastError)
             status.append("\n").append(diag)
         } else {
