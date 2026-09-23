@@ -24,6 +24,8 @@ data class Config(
      *  140 bytes -> 258 wire, EXCEEDS the 255-byte DNS wire limit and is
      *  rejected as malformed. 120 is the practical maximum. */
     val maxChunk: Int = 120,
+    /** Local SOCKS5 port our engine opens; hev-socks5-tunnel dials it. */
+    val socksPort: Int = 7300,
 ) {
     companion object {
         private const val PREFS = "dnstun"
