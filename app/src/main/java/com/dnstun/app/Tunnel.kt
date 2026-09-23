@@ -50,6 +50,11 @@ class Tunnel(
     private val downBytes = AtomicLong()
 
     private var channel: DatagramChannel? = null
+    private var sockRef: DatagramSocket? = null
+    @Volatile private var protectOk = false
+    private val sendErrors = AtomicLong()
+    private val recvErrors = AtomicLong()
+    @Volatile private var lastError = ""
     private var tunOut: FileOutputStream? = null
     private var fragCounter = 0
     private var depth = cfg.startDepth
@@ -66,8 +71,15 @@ class Tunnel(
 
     fun stop() {
         running.set(false)
+        runCatching { sockRef?.close() }
         runCatching { channel?.close() }
         channel = null
+        sockRef = null
+    }
+
+    private fun setError(msg: String) {
+        lastError = msg
+        Log.w(TAG, msg)
     }
 
     // ------------------------------------------------------------------ tun
@@ -122,16 +134,35 @@ class Tunnel(
     // ------------------------------------------------------------------ udp
 
     private fun udpLoop() {
-        val ch = try {
-            DatagramChannel.open()
+        // A plain DatagramSocket has a real fd, so VpnService.protect() actually
+        // works on it. (protect() on a channel-derived socket can silently fail,
+        // which makes the app's own queries loop back into its own VPN.)
+        val sock = try {
+            DatagramSocket()
         } catch (e: Exception) {
-            Log.e(TAG, "channel: ${e.message}")
+            setError("socket: ${e.message}")
+            return
+        }
+        protectOk = protectSocket(sock)
+        if (!protectOk) setError("protect() failed - tunnel queries would be captured by our own VPN")
+        val ch = try {
+            sock.channel
+        } catch (e: Exception) {
+            null
+        }
+        if (ch == null) {
+            setError("no channel on socket")
             return
         }
         ch.configureBlocking(false)
-        protectSocket(ch.socket())
         channel = ch
-        val resolver = InetSocketAddress(InetAddress.getByName(cfg.resolver), cfg.port)
+        sockRef = sock
+        val resolver = try {
+            InetSocketAddress(InetAddress.getByName(cfg.resolver), cfg.port)
+        } catch (e: Exception) {
+            setError("resolver ${cfg.resolver}: ${e.message}")
+            return
+        }
         val rnd = Random(System.nanoTime())
         val inflight = HashMap<Int, Long>()
         val rcv = ByteBuffer.allocate(4096)
@@ -156,7 +187,8 @@ class Tunnel(
                 try {
                     ch.send(ByteBuffer.wrap(q), resolver)
                 } catch (e: Exception) {
-                    if (running.get()) Log.w(TAG, "send: ${e.message}")
+                    sendErrors.incrementAndGet()
+                    if (running.get()) setError("send: ${e.message}")
                     break
                 }
                 inflight[qid] = System.currentTimeMillis()
@@ -170,6 +202,8 @@ class Tunnel(
                 val from = try {
                     ch.receive(rcv)
                 } catch (e: Exception) {
+                    recvErrors.incrementAndGet()
+                    if (running.get()) setError("recv: ${e.message}")
                     break
                 } ?: break
                 got = true
@@ -212,6 +246,10 @@ class Tunnel(
                         sent = sent.get(),
                         recv = recv.get(),
                         lastReplyAgoMs = if (lastReplyAt.get() == 0L) -1L else now - lastReplyAt.get(),
+                        protectOk = protectOk,
+                        sendErrors = sendErrors.get(),
+                        recvErrors = recvErrors.get(),
+                        lastError = lastError,
                     )
                 )
                 statSent = sent.get()

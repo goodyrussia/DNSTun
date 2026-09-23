@@ -126,6 +126,11 @@ class MainActivity : Activity() {
                 s.sent, s.recv,
                 if (s.lastReplyAgoMs < 0) "never" else "${s.lastReplyAgoMs / 1000}s ago"
             )
+            val diag = StringBuilder()
+            diag.append("protect ").append(if (s.protectOk) "ok" else "FAILED")
+            diag.append("   err send ").append(s.sendErrors).append(" / recv ").append(s.recvErrors)
+            if (s.lastError.isNotEmpty()) diag.append("\n").append(s.lastError)
+            status.append("\n").append(diag)
         } else {
             button.text = "Connect"
             status.text = "disconnected"
