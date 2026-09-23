@@ -62,6 +62,7 @@ class Tunnel(
     private var resolverIp = 0
     private val ownLoopDropped = AtomicLong()
     private val tunIdleReads = AtomicLong()
+    private val tunReads = AtomicLong()
     private var tunOut: FileOutputStream? = null
     private var fragCounter = 0
     private var depth = cfg.startDepth
@@ -91,12 +92,24 @@ class Tunnel(
 
     // ------------------------------------------------------------------ tun
 
+    /**
+     * Reads IP packets out of the tun.
+     *
+     * Android hands out a NON-BLOCKING tun fd (AOSP: "By default, the file
+     * descriptor returned by establish() is non-blocking") and ToyVpn polls it
+     * for exactly this reason. FileChannel.read() is the robust way to read such
+     * an fd: an empty queue returns 0 rather than throwing EAGAIN, and a blocking
+     * fd simply blocks. Reading the raw stream with FileInputStream.read(byte[])
+     * throws IOException("Try again") instead - which used to kill this thread.
+     */
     private fun tunReader() {
-        val input = FileInputStream(tun.fileDescriptor)
+        val ch = FileInputStream(tun.fileDescriptor).channel
+        val bb = ByteBuffer.allocate(max(1500, cfg.mtu))
         val buf = ByteArray(max(1500, cfg.mtu))
         while (running.get()) {
+            bb.clear()
             val n = try {
-                input.read(buf)
+                ch.read(bb)
             } catch (e: Exception) {
                 // Android 14+ hands out a NON-BLOCKING tun fd (setBlocking(true) is
                 // ignored), so an idle read throws EAGAIN / "Try again". That is the
@@ -119,6 +132,9 @@ class Tunnel(
                 Thread.sleep(1)
                 continue
             }
+            tunReads.incrementAndGet()
+            bb.flip()
+            bb.get(buf, 0, n)
             // Safety net: if protect() ever fails, our own queries would be routed
             // back into our own VPN and loop forever. Never re-tunnel them.
             if (isOwnTunnelPacket(buf, n)) {
@@ -315,6 +331,7 @@ class Tunnel(
                         lastError = lastError,
                         ownLoopDropped = ownLoopDropped.get(),
                         tunIdleReads = tunIdleReads.get(),
+                        tunReads = tunReads.get(),
                     )
                 )
                 statSent = sent.get()
