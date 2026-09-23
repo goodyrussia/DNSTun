@@ -56,7 +56,7 @@ class DnstunService : VpnService() {
             .addDnsServer("1.1.1.1")
             .addDnsServer("8.8.8.8")
             .setBlocking(true)
-        runCatching { addDisallowedApplication(packageName) }
+        runCatching { builder.addDisallowedApplication(packageName) }
 
         val fd = try {
             builder.establish()
