@@ -9,7 +9,6 @@ import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
-import hev.htproxy.TProxyService
 import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -170,7 +169,7 @@ class DnstunService : VpnService() {
 
         // ---- 6. bridge ------------------------------------------------------
         val ok = try {
-            TProxyStartService(cfgPath, fd.fd)
+            TProxyService.TProxyStartService(cfgPath, fd.fd)
         } catch (e: Throwable) {
             Log.e(TAG, "TProxyStartService threw", e)
             false
@@ -189,7 +188,7 @@ class DnstunService : VpnService() {
     private fun startStatsLoop() {
         statsThread = Thread {
             while (running && !stopping.get()) {
-                val st = runCatching { TProxyGetStats() }.getOrNull()
+                val st = runCatching { TProxyService.TProxyGetStats() }.getOrNull()
                 val tx = if (st != null && st.size >= 2) st[0] else 0L
                 val rx = if (st != null && st.size >= 2) st[1] else 0L
                 val alive = engine?.isAlive == true
@@ -224,7 +223,7 @@ class DnstunService : VpnService() {
 
     private fun stopTunnel() {
         stopping.set(true)
-        runCatching { TProxyStopService() }
+        runCatching { TProxyService.TProxyStopService() }
         runCatching { engine?.destroy() }
         engine = null
         runCatching { pfd?.close() }
