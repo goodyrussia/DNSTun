@@ -135,6 +135,7 @@ class MainActivity : Activity() {
             sb.append("\nnow in: ").append(s.op)
             if (s.stalledFor > 0) sb.append("   *** STALLED ").append(s.stalledFor).append("s ***")
             if (s.probeSent > 0) sb.append("\npath test: ").append(s.probeRecv).append("/").append(s.probeSent).append(" replies")
+            sb.append("\nqueue ").append(s.upQueued).append("   inflight ").append(s.inflight).append("/").append(s.depth)
             if (s.lastError.isNotEmpty()) sb.append("\n").append(s.lastError)
             status.text = sb.toString()
         } else {

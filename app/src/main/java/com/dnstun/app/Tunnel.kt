@@ -43,8 +43,6 @@ class Tunnel(
     private val onStats: (TunnelStats) -> Unit,
 ) {
     private val running = AtomicBoolean(false)
-    private val queue = ArrayDeque<ByteArray>()
-    private val queueLock = Object()
 
     private val sent = AtomicLong()
     private val recv = AtomicLong()
@@ -53,6 +51,14 @@ class Tunnel(
     private val downBytes = AtomicLong()
 
     private var channel: DatagramChannel? = null
+    /** fragments waiting to go out; the sender thread drains this */
+    private val upQueue = ArrayDeque<ByteArray>()
+    private val upLock = Object()
+    private val upDropped = AtomicLong()
+    private val inflight = java.util.concurrent.ConcurrentHashMap<Int, Long>()
+    @Volatile private var depth = 128
+    @Volatile private var sendStalled = 0L
+    @Volatile private var recvStalled = 0L
     private var sockRef: DatagramSocket? = null
     @Volatile private var protectOk = false
     @Volatile private var bindOk = false
@@ -60,6 +66,10 @@ class Tunnel(
     private val recvErrors = AtomicLong()
     @Volatile private var lastError = ""
     private var resolverIp = 0
+    @Volatile private var lastRecvAt = 0L
+    private val probeLock = Object()
+    @Volatile private var rcvBufSize = -1
+    @Volatile private var sndBufSize = -1
     private val ownLoopDropped = AtomicLong()
     private val tunIdleReads = AtomicLong()
     private val tunReads = AtomicLong()
@@ -72,12 +82,11 @@ class Tunnel(
     private var lastSendAt = 0L
     // built-in path self-test: 60 queries on distinct qids, count how many come back
     private val probeQids = HashSet<Int>()
-    private var probeUntil = 0L
-    private var probeSent = 0
-    private var probeRecv = 0
+    @Volatile private var probeUntil = 0L
+    @Volatile private var probeSent = 0
+    @Volatile private var probeRecv = 0
     private var tunOut: FileOutputStream? = null
     private var fragCounter = 0
-    private var depth = cfg.startDepth
 
     @Volatile
     private var lastLoss = 0.0
@@ -85,9 +94,14 @@ class Tunnel(
     fun start() {
         if (!running.compareAndSet(false, true)) return
         depth = cfg.startDepth
+        // Every blocking call gets its own thread. A blocked send, a blocked
+        // receive or a blocked tun write can then no longer freeze the tunnel -
+        // which is exactly how they all used to fail.
         thread(name = "dnstun-tun") { tunReader() }
         thread(name = "dnstun-tunw") { tunWriter() }
-        thread(name = "dnstun-udp") { udpLoop() }
+        thread(name = "dnstun-send") { senderLoop() }
+        thread(name = "dnstun-recv") { receiverLoop() }
+        thread(name = "dnstun-stat") { statsLoop() }
     }
 
     fun stop() {
@@ -189,8 +203,9 @@ class Tunnel(
             chunk[2] = idx.toByte()
             chunk[3] = if (off + len < n) FLAG_MORE.toByte() else 0
             System.arraycopy(pkt, off, chunk, 4, len)
-            synchronized(queueLock) {
-                if (queue.size < 8192) queue.addLast(chunk)
+            synchronized(upLock) {
+                if (upQueue.size < 8192) upQueue.addLast(chunk)
+                else upDropped.incrementAndGet()
             }
             off += len
             idx++
@@ -237,15 +252,17 @@ class Tunnel(
 
     // ------------------------------------------------------------------ udp
 
-    private fun udpLoop() {
-        // A plain DatagramSocket has a real fd, so VpnService.protect() actually
-        // works on it. (protect() on a channel-derived socket can silently fail,
-        // which makes the app's own queries loop back into its own VPN.)
+    /**
+     * Opens the tunnel socket. A plain DatagramSocket is used because
+     * VpnService.protect() genuinely works on it (it returns false on
+     * channel-derived sockets on some devices).
+     */
+    private fun openSocket(): DatagramSocket? {
         val sock = try {
             DatagramSocket()
         } catch (e: Exception) {
             setError("socket: ${e.message}")
-            return
+            return null
         }
         protectOk = try {
             protectSocket(sock)
@@ -254,9 +271,6 @@ class Tunnel(
             false
         }
         if (!protectOk) {
-            // protect() returns false on some devices/versions. Binding the socket
-            // to the real underlying network has the same effect: our queries
-            // leave via mobile data instead of being captured by our own VPN.
             bindOk = try {
                 bindUnderlying(sock)
             } catch (e: Exception) {
@@ -265,11 +279,19 @@ class Tunnel(
             }
             if (!bindOk) setError("protect() and bind() both failed - queries would loop into our own VPN")
         }
-        // A plain socket is blocking; a 2 ms timeout makes receive() return
-        // promptly when nothing is waiting, without the channel machinery
-        // (which has no channel at all on a plain DatagramSocket).
+        // Big socket buffers: replies arrive in bursts of `depth` packets, and a
+        // small receive buffer silently discards most of them.
+        runCatching { sock.receiveBufferSize = 4 shl 20 }
+        runCatching { sock.sendBufferSize = 4 shl 20 }
         runCatching { sock.soTimeout = 2 }
+        rcvBufSize = runCatching { sock.receiveBufferSize }.getOrDefault(-1)
+        sndBufSize = runCatching { sock.sendBufferSize }.getOrDefault(-1)
         sockRef = sock
+        return sock
+    }
+
+    private fun senderLoop() {
+        val sock = openSocket() ?: return
         val resolver = try {
             InetSocketAddress(InetAddress.getByName(cfg.resolver), cfg.port)
         } catch (e: Exception) {
@@ -278,174 +300,184 @@ class Tunnel(
             return
         }
         resolverIp = ipToInt(resolver.address)
-        // surface the socket state now, so a dead loop can never look like a
-        // silent blank panel again
         onStats(TunnelStats(protectOk = protectOk, bindOk = bindOk, depth = depth, lastError = lastError))
         val rnd = Random(System.nanoTime())
-        val inflight = HashMap<Int, Long>()
-        val rcv = ByteArray(4096)
-
         val startedAt = System.currentTimeMillis()
         lastSendAt = startedAt
-        var lastStat = startedAt
-        var lastAdapt = lastStat
-        var statSent = 0L
-        var statRecv = 0L
-        var statDown = 0L
-        var statUp = 0L
-        var statLost = 0L
-        var lastStatTime = lastStat
+        var probeDone = false
 
         while (running.get()) {
-            // ---- keep `depth` queries in flight ----
-            var guard = 0
-            while (inflight.size < depth && guard++ < 512) {
-                val chunk = synchronized(queueLock) { queue.removeFirstOrNull() }
+            val now = System.currentTimeMillis()
+
+            // one-shot path self-test: 60 fresh queries, count the replies
+            if (!probeDone && now - startedAt > 1500) {
+                probeDone = true
+                probeSent = 0
+                probeRecv = 0
+                synchronized(probeLock) { probeQids.clear() }
+                var ok = 0
+                for (i in 0 until 60) {
+                    val qid = 60000 + i
+                    val q = buildQuery(pollName(), qid)
+                    try {
+                        op = "send"
+                        sock.send(DatagramPacket(q, q.size, resolver))
+                        inflight[qid] = now
+                        synchronized(probeLock) { probeQids.add(qid) }
+                        ok++
+                    } catch (e: Exception) {
+                        sendErrors.incrementAndGet()
+                        break
+                    }
+                }
+                probeSent = ok
+                sent.addAndGet(ok.toLong())
+                probeUntil = now + 5000
+            }
+
+            // keep `depth` queries in flight: real data first, polls to fill
+            var sentThisRound = 0
+            while (inflight.size < depth && sentThisRound < 1024) {
+                val chunk = synchronized(upLock) { upQueue.removeFirstOrNull() }
                 val name = if (chunk != null) encodeName(chunk) else pollName()
                 val qid = rnd.nextInt(1, 65536)
+                if (inflight.containsKey(qid)) continue
                 val q = buildQuery(name, qid)
                 try {
                     op = "send"
                     sock.send(DatagramPacket(q, q.size, resolver))
+                    inflight[qid] = System.currentTimeMillis()
                     lastSendAt = System.currentTimeMillis()
+                    sent.incrementAndGet()
+                    sentThisRound++
                 } catch (e: Exception) {
                     sendErrors.incrementAndGet()
                     if (running.get()) setError("send: ${e.message}")
                     break
                 }
-                inflight[qid] = System.currentTimeMillis()
-                sent.incrementAndGet()
             }
 
-            // ---- drain everything that is waiting ----
-            var got = false
-            while (true) {
-                val pkt = DatagramPacket(rcv, rcv.size)
-                try {
-                    op = "recv"
-                    sock.receive(pkt)
-                } catch (e: SocketTimeoutException) {
-                    break
-                } catch (e: Exception) {
-                    if (running.get()) {
-                        recvErrors.incrementAndGet()
-                        setError("recv: ${e.message}")
+            val idle = System.currentTimeMillis() - lastSendAt
+            sendStalled = if (idle > 3000) idle / 1000 else 0
+            if (sentThisRound == 0) Thread.sleep(1)
+        }
+    }
+
+    private fun receiverLoop() {
+        val sock = sockRef ?: return
+        val rcv = ByteArray(4096)
+        while (running.get()) {
+            val pkt = DatagramPacket(rcv, rcv.size)
+            try {
+                op = "recv"
+                sock.receive(pkt)
+            } catch (e: SocketTimeoutException) {
+                recvStalled = if (System.currentTimeMillis() - lastRecvAt > 3000) 1 else 0
+                continue
+            } catch (e: Exception) {
+                if (running.get()) {
+                    recvErrors.incrementAndGet()
+                    setError("recv: ${e.message}")
+                }
+                Thread.sleep(5)
+                continue
+            }
+            lastRecvAt = System.currentTimeMillis()
+            lastReplyAt.set(lastRecvAt)
+            recv.incrementAndGet()
+            if (pkt.length >= 2) {
+                val rqid = ((pkt.data[0].toInt() and 0xFF) shl 8) or (pkt.data[1].toInt() and 0xFF)
+                if (probeUntil > 0) {
+                    synchronized(probeLock) {
+                        if (probeQids.remove(rqid)) probeRecv++
                     }
-                    break
                 }
-                got = true
-                recv.incrementAndGet()
-                lastReplyAt.set(nowMs())
-                if (pkt.length >= 2) {
-                    val rqid = ((pkt.data[0].toInt() and 0xFF) shl 8) or (pkt.data[1].toInt() and 0xFF)
-                    if (probeQids.remove(rqid)) probeRecv++
-                }
-                handleResponse(pkt.data, pkt.length, inflight)
             }
+            handleResponse(pkt.data, pkt.length, inflight)
+        }
+    }
 
-            // ---- drop queries that never came back ----
+    private fun statsLoop() {
+        var lastStat = System.currentTimeMillis()
+        var lastAdapt = lastStat
+        var statSent = sent.get()
+        var statRecv = recv.get()
+        var statDown = downBytes.get()
+        var statUp = upBytes.get()
+        var statLost = lost.get()
+        while (running.get()) {
+            Thread.sleep(500)
             val now = System.currentTimeMillis()
+            if (now - lastStat < 1000) continue
+
+            // drop queries that never came back
             val stale = ArrayList<Int>()
             for ((qid, at) in inflight) if (now - at > 3000) stale.add(qid)
             for (qid in stale) {
                 inflight.remove(qid)
                 lost.incrementAndGet()
-                if (probeQids.remove(qid)) probeSent++
-            }
-
-            // ---- stall detector: if we have not managed to send for 3s while
-            //      claiming to run, name the call we are stuck in ----
-            if (lastSendAt > 0 && now - lastSendAt > 3000) {
-                stalledFor = (now - lastSendAt) / 1000
-                setError("STALLED ${stalledFor}s in $op")
-            } else {
-                stalledFor = 0
-            }
-
-            // ---- path self-test: 60 fresh queries, how many replies come back ----
-            if (probeUntil == 0L && now - startedAt > 1500) {
-                probeQids.clear()
-                probeSent = 0
-                probeRecv = 0
-                for (i in 0 until 60) {
-                    val qid = 60000 + i
-                    val q = buildQuery(pollName(), qid)
-                    try {
-                        sock.send(DatagramPacket(q, q.size, resolver))
-                        probeQids.add(qid)
-                    } catch (e: Exception) {
-                        break
-                    }
+                if (probeUntil > 0) {
+                    synchronized(probeLock) { probeQids.remove(qid) }
                 }
-                probeUntil = now + 5000
             }
 
-            // ---- stats + depth tuning every second ----
-            if (now - lastStat >= 1000) {
-                val dt = (now - lastStatTime) / 1000.0
-                val qps = (recv.get() - statRecv) / dt
-                val down = (downBytes.get() - statDown) / dt
-                val up = (upBytes.get() - statUp) / dt
-                val dSent = sent.get() - statSent
-                val dLost = lost.get() - statLost
-                lastLoss = if (dSent > 0) min(100.0, 100.0 * dLost / dSent) else 0.0
-                onStats(
-                    TunnelStats(
-                        queriesPerSec = qps,
-                        downKBps = down / 1024.0,
-                        upKBps = up / 1024.0,
-                        lossPercent = lastLoss,
-                        depth = depth,
-                        upBytes = upBytes.get(),
-                        downBytes = downBytes.get(),
-                        sent = sent.get(),
-                        recv = recv.get(),
-                        lastReplyAgoMs = if (lastReplyAt.get() == 0L) -1L else now - lastReplyAt.get(),
-                        protectOk = protectOk,
-                        bindOk = bindOk,
-                        sendErrors = sendErrors.get(),
-                        recvErrors = recvErrors.get(),
-                        lastError = lastError,
-                        ownLoopDropped = ownLoopDropped.get(),
-                        tunIdleReads = tunIdleReads.get(),
-                        tunReads = tunReads.get(),
-                        tunWriteDropped = tunWriteDropped.get(),
-                        op = op,
-                        stalledFor = stalledFor,
-                        probeSent = probeSent,
-                        probeRecv = probeRecv,
-                    )
+            val dt = (now - lastStat) / 1000.0
+            val qps = (recv.get() - statRecv) / dt
+            val down = (downBytes.get() - statDown) / dt
+            val up = (upBytes.get() - statUp) / dt
+            val dSent = sent.get() - statSent
+            val dLost = lost.get() - statLost
+            lastLoss = if (dSent > 0) min(100.0, 100.0 * dLost / dSent) else 0.0
+
+            // depth tuning: climb while the path is healthy, back off when it is not
+            if (now - lastAdapt > 3000) {
+                lastAdapt = now
+                val q = synchronized(upLock) { upQueue.size }
+                when {
+                    lastLoss > 8.0 || (q == 0 && qps < 5.0) -> depth = max(cfg.minDepth, depth - 16)
+                    lastLoss < 4.0 && depth < cfg.maxDepth && q > 0 -> depth = min(cfg.maxDepth, depth + 16)
+                    lastLoss < 4.0 && depth < cfg.maxDepth && qps > depth * 2.0 -> depth = min(cfg.maxDepth, depth + 16)
+                }
+            }
+
+            onStats(
+                TunnelStats(
+                    queriesPerSec = qps,
+                    downKBps = down / 1024.0,
+                    upKBps = up / 1024.0,
+                    lossPercent = lastLoss,
+                    depth = depth,
+                    upBytes = upBytes.get(),
+                    downBytes = downBytes.get(),
+                    sent = sent.get(),
+                    recv = recv.get(),
+                    lastReplyAgoMs = if (lastReplyAt.get() == 0L) -1L else now - lastReplyAt.get(),
+                    protectOk = protectOk,
+                    bindOk = bindOk,
+                    sendErrors = sendErrors.get(),
+                    recvErrors = recvErrors.get(),
+                    lastError = lastError,
+                    ownLoopDropped = ownLoopDropped.get(),
+                    tunIdleReads = tunIdleReads.get(),
+                    tunReads = tunReads.get(),
+                    tunWriteDropped = tunWriteDropped.get(),
+                    op = op,
+                    stalledFor = max(sendStalled, recvStalled),
+                    probeSent = probeSent,
+                    probeRecv = probeRecv,
+                    upQueued = synchronized(upLock) { upQueue.size },
+                    inflight = inflight.size,
                 )
-                statSent = sent.get()
-                statRecv = recv.get()
-                statDown = downBytes.get()
-                statUp = upBytes.get()
-                statLost = lost.get()
-                lastStat = now
-                lastStatTime = now
-
-                if (now - lastAdapt >= 2000) {
-                    lastAdapt = now
-                    when {
-                        lastLoss < 4.0 && depth < cfg.maxDepth -> depth += 16
-                        lastLoss > 8.0 && depth > cfg.minDepth -> depth -= 16
-                    }
-                    if (depth < cfg.minDepth) depth = cfg.minDepth
-                    if (depth > cfg.maxDepth) depth = cfg.maxDepth
-                }
-            }
-
-            if (!got) Thread.sleep(1)
+            )
+            statSent = sent.get()
+            statRecv = recv.get()
+            statDown = downBytes.get()
+            statUp = upBytes.get()
+            statLost = lost.get()
         }
     }
 
-    // ------------------------------------------------------- wire format
 
-    /**
-     * Poll query with fresh random bytes. Resolvers cache answers to repeated
-     * names - even TTL=0 ones - so a constant poll name would make every reply
-     * after the first come back empty.
-     */
     private fun nowMs() = System.currentTimeMillis()
 
     private fun pollName(): String {

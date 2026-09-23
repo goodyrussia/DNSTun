@@ -81,4 +81,6 @@ data class TunnelStats(
     val stalledFor: Long = 0,
     val probeSent: Int = 0,
     val probeRecv: Int = 0,
+    val upQueued: Int = 0,
+    val inflight: Int = 0,
 )
