@@ -1,0 +1,15 @@
+{
+  "domain": "v.techychi.com",
+  "ns_name": "ns.techychi.com",
+  "listen": ":53",
+  "tun_name": "dtun0",
+  "tun_addr": "10.78.0.1/16",
+  "client_subnet": "10.78.0.0/16",
+  "tun_mtu": 1100,
+  "max_udp": 1300,
+  "workers": 4,
+  "debug": false,
+  "users": [
+    { "name": "goodi", "sid": "g7x2k9", "vip": "10.78.0.2" }
+  ]
+}

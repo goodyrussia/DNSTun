@@ -1,0 +1,16 @@
+[Unit]
+Description=DNSTun DNS tunnel server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/root/dnstun/dnstund -config /root/dnstun/config.json
+Restart=always
+RestartSec=2
+LimitNOFILE=65535
+StandardOutput=append:/root/dnstun/server.log
+StandardError=append:/root/dnstun/server.log
+
+[Install]
+WantedBy=multi-user.target
