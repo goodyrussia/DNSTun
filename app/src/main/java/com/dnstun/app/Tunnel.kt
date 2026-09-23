@@ -529,7 +529,7 @@ class Tunnel(
      * A reply is: 3 byte header (seq, flags) + zero or more raw IP packets,
      * wrapped in one TXT record. We only care about the payload.
      */
-    private fun handleResponse(msg: ByteArray, len: Int, inflight: HashMap<Int, Long>) {
+    private fun handleResponse(msg: ByteArray, len: Int, inflight: MutableMap<Int, Long>) {
         if (len < 12) return
         val qid = ((msg[0].toInt() and 0xFF) shl 8) or (msg[1].toInt() and 0xFF)
         if (inflight.remove(qid) != null) recvOk++ else badQid++
