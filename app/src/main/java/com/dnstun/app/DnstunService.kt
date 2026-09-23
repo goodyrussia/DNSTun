@@ -9,6 +9,7 @@ import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import hev.htproxy.TProxyService
 import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
