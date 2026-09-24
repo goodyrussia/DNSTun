@@ -12,19 +12,17 @@ data class Config(
     val zone: String = "v.techychi.com",
     val sid: String = "g7x2k9",
     val vip: String = "10.78.0.2",
-    val mtu: Int = 600,
+    val mtu: Int = 1500,
     val edns: Int = 1300,
+    /** Start depth: the Smarty climb peaked at ~12k in-flight queries
+     *  (6.6 MB/s sustained, 7.6 MB/s burst). 8192 is the sweet spot. */
     val startDepth: Int = 8192,
     val minDepth: Int = 16,
-    /** Sweep-proven: 128 gives 440 replies/s, 192 drops to 118/s with
-     *  21% loss, 256 collapses to 7/s. Never climb past 160. */
     val maxDepth: Int = 12288,
-    /** Upstream bytes per query. Sweep-proven on the Smarty resolver:
-     *  120 bytes -> 224-char dotted name / 226 wire, accepted.
-     *  140 bytes -> 258 wire, EXCEEDS the 255-byte DNS wire limit and is
-     *  rejected as malformed. 120 is the practical maximum. */
+    /** Upstream bytes per query. Probes: 60-byte payload (127-char name) is
+     *  always accepted; 80+ is what the carrier drops. 80 stays as the cap. */
     val maxChunk: Int = 80,
-    /** Local SOCKS5 port our engine opens; hev-socks5-tunnel dials it. */
+    /** Local SOCKS5 port the engine opens; tun2socks dials it. */
     val socksPort: Int = 7300,
 ) {
     companion object {
