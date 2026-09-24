@@ -10,8 +10,8 @@ android {
         applicationId = "com.dnstun.app"
         minSdk = 26
         targetSdk = 37
-        versionCode = 5
-        versionName = "2.4.0"
+        versionCode = 6
+        versionName = "2.7.0"
     }
 
     signingConfigs {
@@ -47,6 +47,12 @@ android {
 
     packaging {
         resources.excludes += setOf("META-INF/*.kotlin_module")
+        // libdnstun.so is not a loadable library -- it is an ELF EXECUTABLE that
+        // DnstunService execs from nativeLibraryDir. With the default
+        // useLegacyPackaging=false, AGP stores .so files page-aligned inside the
+        // APK and NEVER extracts them to disk, so nativeLibraryDir is empty and
+        // the engine "goes missing" on every fresh install.
+        jniLibs.useLegacyPackaging = true
     }
 }
 
