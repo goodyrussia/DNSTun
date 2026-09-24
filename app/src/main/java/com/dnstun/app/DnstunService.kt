@@ -5,8 +5,6 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
-import android.net.LocalSocket
-import android.net.LocalSocketAddress
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -17,26 +15,21 @@ import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Wiring taken 1:1 from the two apps proven on this device class:
+ * SlipNet's proven on-device recipe, wired to our engine and our server:
  *
- *   SocksDroid (bndeff/socksdroid) and Hamara Tunnel. Both run this exact
- *   BadVPN tun2socks 1.999.127 fork (it reports "net.typeblog.socks" in its
- *   strings) behind a VpnService with these numbers:
+ *   1. establish the VPN FIRST -- 10.255.255.1/32, MTU 1280, DNS = carrier
+ *      resolver, route 0.0.0.0/0 -- with this app excluded from it
+ *      (addDisallowedApplication), so the engine's own queries to the
+ *      carrier resolver leave the phone directly and never loop;
+ *   2. start the engine (libdnstun.so): SOCKS5 CONNECT for TCP + FWD_UDP
+ *      (cmd 0x05) for DNS, both riding our DNS tunnel to our server;
+ *   3. start hev-socks5-tunnel with udp:'tcp': it owns the TUN and sends
+ *      every UDP datagram (all of Android's DNS) to the engine as FWD_UDP
+ *      frames on a TCP connection, and every TCP stream as a CONNECT.
  *
- *     TUN            10.111.0.1/24     dns stub 8.8.8.8     mtu 1500
- *     tun2socks      --netif-ipaddr 10.111.0.2 --netif-netmask 255.255.255.0
- *                    --socks-server-addr 127.0.0.1:7300
- *                    --sock <unix path>   <- ANDROID build takes the TUN fd
- *                                            ONLY over this unix socket
- *                    --dnsgw 10.111.0.1:8091   <- engine's DNS listener
- *     engine         SOCKS5 on 127.0.0.1:7300 + DNS on 10.111.0.1:8091
- *
- * Why the 2.x builds could never work:
- *   tun2socks rewrites every UDP :53 packet (dst = dnsgw) and writes it back
- *   into the TUN; the kernel only delivers such a packet to a socket bound on
- *   the TUN's own address. 2.x pointed dnsgw at 127.0.0.1 (never deliverable
- *   from a tun device) and the hev-based builds never set dnsgw at all, so
- *   DNS never resolved and no page ever loaded even though the tunnel ran.
+ * No kernel tricks anywhere: no iptables, no dnsgw rewriting, no writing
+ * packets back into the TUN, no fd passing over unix sockets. The DNS path
+ * is exactly the one SlipNet's working builds use.
  */
 class DnstunService : VpnService() {
 
@@ -47,14 +40,10 @@ class DnstunService : VpnService() {
         const val CHANNEL_ID = "dnstun"
         private const val NOTIF_ID = 1
 
-        // SocksDroid / Hamara numbers. Do not invent others.
-        const val TUN_ADDR = "10.111.0.1"
-        const val TUN_PREFIX = 24
-        const val T2S_GW = "10.111.0.2"
-        const val T2S_MASK = "255.255.255.0"
-        const val TUN_MTU = 1500
-        const val STUB_DNS = "8.8.8.8"
-        const val DNS_PORT = 8091
+        // SlipNet's numbers, verbatim.
+        const val TUN_ADDR = "10.255.255.1"
+        const val TUN_PREFIX = 32
+        const val TUN_MTU = 1280
 
         @Volatile var running = false
             private set
@@ -65,15 +54,13 @@ class DnstunService : VpnService() {
 
     private var pfd: ParcelFileDescriptor? = null
     @Volatile private var engine: Process? = null
-    @Volatile private var t2s: Process? = null
     private val stopping = AtomicBoolean(false)
     @Volatile private var statsText: String? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
-                stopTunnel()
-                stopSelf()
+                Thread { stopTunnel() }.start()
                 return START_NOT_STICKY
             }
             else -> {
@@ -87,16 +74,21 @@ class DnstunService : VpnService() {
     private fun startTunnel() {
         if (running) return
         val cfg = Config.load(this)
-        Log.i(TAG, "start: resolver=${cfg.resolver} zone=${cfg.zone} sid=${cfg.sid}")
+        Log.i(TAG, "start: resolver=${cfg.resolver}:${cfg.port} zone=${cfg.zone} sid=${cfg.sid}")
 
+        if (!HevTunnel.isLoaded()) {
+            fail("hev native libs missing")
+            return
+        }
+
+        // 1. VPN first (SlipNet order): the engine's own sockets must be
+        //    created outside the VPN, so the app is excluded here.
         val builder = Builder()
             .setMtu(TUN_MTU)
             .setSession("DNSTun")
             .addAddress(TUN_ADDR, TUN_PREFIX)
+            .addDnsServer(cfg.resolver)
             .addRoute("0.0.0.0", 0)
-            .addRoute(STUB_DNS, 32)
-            .addDnsServer(STUB_DNS)
-        runCatching { builder.setBlocking(false) }
         runCatching { builder.addDisallowedApplication(packageName) }
         val fd = try {
             builder.establish()
@@ -109,21 +101,14 @@ class DnstunService : VpnService() {
             return
         }
         pfd = fd
-        Log.i(TAG, "tun up ${TUN_ADDR}/$TUN_PREFIX mtu=$TUN_MTU dns=$STUB_DNS")
+        Log.i(TAG, "tun up $TUN_ADDR/$TUN_PREFIX mtu=$TUN_MTU dns=${cfg.resolver}")
 
-        val libDir = applicationInfo.nativeLibraryDir
-        val enginePath = File(libDir, "libdnstun.so")
-        val t2sPath = File(libDir, "libtun2socks.so")
+        // 2. engine: SOCKS5 CONNECT + FWD_UDP over our DNS tunnel.
+        val enginePath = File(applicationInfo.nativeLibraryDir, "libdnstun.so")
         if (!enginePath.exists()) {
             fail("engine missing: ${enginePath.absolutePath}")
             return
         }
-        if (!t2sPath.exists()) {
-            fail("tun2socks missing: ${t2sPath.absolutePath}")
-            return
-        }
-
-        // 1. engine first: SOCKS5 + DNS listener on the TUN address
         val cmd = listOf(
             enginePath.absolutePath,
             "-resolver", "${cfg.resolver}:${cfg.port}",
@@ -133,7 +118,8 @@ class DnstunService : VpnService() {
             "-chunk", cfg.maxChunk.toString(),
             "-depth", cfg.startDepth.toString(),
             "-edns", cfg.edns.toString(),
-            "-dns", "$TUN_ADDR:$DNS_PORT",
+            "-dns", "127.0.0.1:5353",
+            "-dnsdirect=true",
         )
         Log.i(TAG, "engine: ${cmd.joinToString(" ")}")
         val p = try {
@@ -149,7 +135,6 @@ class DnstunService : VpnService() {
                     Log.i(TAG, "engine: $line")
                     if (line.startsWith("STATS ")) {
                         statsText = line.removePrefix("STATS ")
-                        lastStats = TunnelStats(state = "connected", text = statsText!!)
                     }
                 }
             }
@@ -158,7 +143,7 @@ class DnstunService : VpnService() {
         var up = false
         for (i in 0 until 100) {
             if (stopping.get()) return
-            if (portOpen("127.0.0.1", cfg.socksPort) && portOpen(TUN_ADDR, DNS_PORT)) {
+            if (portOpen("127.0.0.1", cfg.socksPort)) {
                 up = true
                 break
             }
@@ -166,89 +151,37 @@ class DnstunService : VpnService() {
             Thread.sleep(100)
         }
         if (!up) {
-            fail("engine ports not up (socks 127.0.0.1:${cfg.socksPort} dns $TUN_ADDR:$DNS_PORT)")
+            fail("engine SOCKS5 not up on 127.0.0.1:${cfg.socksPort}")
             return
         }
-        Log.i(TAG, "engine up: socks + dns listening")
+        Log.i(TAG, "engine up: socks5 listening")
 
-        // 2. tun2socks, then hand it the TUN fd over the unix socket
-        val sockFile = File(filesDir, "t2s.sock")
-        runCatching { sockFile.delete() }
-
-        val t2sCmd = listOf(
-            t2sPath.absolutePath,
-            "--netif-ipaddr", T2S_GW,
-            "--netif-netmask", T2S_MASK,
-            "--socks-server-addr", "127.0.0.1:${cfg.socksPort}",
-            "--tunfd", fd.fd.toString(),
-            "--tunmtu", TUN_MTU.toString(),
-            "--loglevel", "3",
-            "--pid", File(filesDir, "tun2socks.pid").absolutePath,
-            "--sock", sockFile.absolutePath,
-            "--dnsgw", "$TUN_ADDR:$DNS_PORT",
-        )
-        Log.i(TAG, "tun2socks: ${t2sCmd.joinToString(" ")}")
-        val tp = try {
-            ProcessBuilder(t2sCmd).redirectErrorStream(true).start()
-        } catch (e: Exception) {
-            fail("tun2socks start: ${e.message}")
+        // 3. hev-socks5-tunnel: TUN -> engine (udp:'tcp' -> FWD_UDP for DNS).
+        if (!HevTunnel.start(fd, cfg.socksPort, TUN_MTU, TUN_ADDR)) {
+            fail("hev start failed")
             return
         }
-        t2s = tp
-        Thread {
-            runCatching {
-                tp.inputStream.bufferedReader().forEachLine { Log.i(TAG, "t2s: $it") }
-            }
-        }.start()
-
-        if (!sendFd(fd, sockFile)) {
-            fail("TUN fd was not accepted by tun2socks")
-            return
-        }
-        Log.i(TAG, "tun fd delivered")
+        Log.i(TAG, "hev running")
 
         running = true
-        lastStats = TunnelStats(state = "connected", text = "tun2socks + engine")
+        lastStats = TunnelStats(state = "connected", text = "hev + engine")
+
         Thread {
             while (running && !stopping.get()) {
-                val alive = engine?.isAlive == true && t2s?.isAlive == true
+                val alive = engine?.isAlive == true && HevTunnel.isRunning()
+                val st = HevTunnel.getStats()
                 lastStats = TunnelStats(
                     state = if (alive) "connected" else "stopped",
-                    text = statsText ?: if (alive) "tun2socks + engine" else "process dead",
+                    text = statsText ?: if (alive) "hev + engine" else "process dead",
+                    txBytes = st?.getOrNull(1) ?: 0L,
+                    rxBytes = st?.getOrNull(3) ?: 0L,
+                    upMB = (st?.getOrNull(1) ?: 0L) / 1_000_000.0,
+                    downMB = (st?.getOrNull(3) ?: 0L) / 1_000_000.0,
                 )
-                Thread.sleep(2000)
+                Thread.sleep(1000)
             }
         }.start()
         Log.i(TAG, "tunnel running")
-    }
-
-    /**
-     * The ANDROID build of this tun2socks fork always receives its TUN fd as
-     * SCM_RIGHTS ancillary data on the unix socket given to --sock; it never
-     * reads --tunfd. This is the same fd pass Hamara and SocksDroid do.
-     */
-    private fun sendFd(pfd: ParcelFileDescriptor, sockPath: File): Boolean {
-        repeat(25) {
-            if (stopping.get()) return false
-            try {
-                if (!sockPath.exists()) {
-                    Thread.sleep(200)
-                    return@repeat
-                }
-                val ls = LocalSocket()
-                ls.connect(
-                    LocalSocketAddress(sockPath.absolutePath, LocalSocketAddress.Namespace.FILESYSTEM)
-                )
-                ls.setFileDescriptorsForSend(arrayOf(pfd.fileDescriptor))
-                ls.outputStream.write(42)
-                ls.shutdownOutput()
-                ls.close()
-                return true
-            } catch (e: Exception) {
-                Thread.sleep(200)
-            }
-        }
-        return false
     }
 
     private fun portOpen(host: String, port: Int): Boolean = try {
@@ -269,8 +202,7 @@ class DnstunService : VpnService() {
 
     private fun stopTunnel() {
         stopping.set(true)
-        runCatching { t2s?.destroy() }
-        t2s = null
+        runCatching { HevTunnel.stop() }
         runCatching { engine?.destroy() }
         engine = null
         runCatching { pfd?.close() }
@@ -287,12 +219,12 @@ class DnstunService : VpnService() {
     }
 
     override fun onDestroy() {
-        stopTunnel()
+        Thread { stopTunnel() }.start()
         super.onDestroy()
     }
 
     override fun onRevoke() {
-        stopTunnel()
+        Thread { stopTunnel() }.start()
         super.onRevoke()
     }
 

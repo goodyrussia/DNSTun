@@ -12,7 +12,8 @@ data class Config(
     val zone: String = "v.techychi.com",
     val sid: String = "g7x2k9",
     val vip: String = "10.78.0.2",
-    val mtu: Int = 1500,
+    /** TUN MTU: SlipNet's proven number for hev's udp:'tcp' path. */
+    val mtu: Int = 1280,
     val edns: Int = 1300,
     /** Start depth: the Smarty climb peaked at ~12k in-flight queries
      *  (6.6 MB/s sustained, 7.6 MB/s burst). 8192 is the sweet spot. */

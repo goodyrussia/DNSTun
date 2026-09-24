@@ -1,0 +1,110 @@
+./obj/local/arm64-v8a/objs/lwip/src/core/memp.o: \
+  hev-socks5-tunnel-src/third-part/lwip/src/core/memp.c \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/opt.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/ports/include/lwipopts.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/debug.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/arch.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/ports/include/arch/cc.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/ports/include/arch/../../unix/include/cc.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/memp.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/priv/memp_std.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/priv/memp_priv.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/mem.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/priv/mem_priv.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/stats.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/sys.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/pbuf.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/err.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/raw.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/udp.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/netif.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/ip_addr.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/def.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/ip4_addr.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/ip6_addr.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/ip6_zone.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/ip.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/ip4.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/prot/ip4.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/ip6.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/prot/ip6.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/prot/ip.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/prot/udp.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/tcp.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/tcpbase.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/icmp.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/prot/icmp.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/icmp6.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/prot/icmp6.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/priv/tcp_priv.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/prot/tcp.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/altcp.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/ip4_frag.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/netbuf.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/api.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/priv/tcpip_priv.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/priv/api_msg.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/igmp.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/priv/sockets_priv.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/etharp.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/timeouts.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/netif/ppp/ppp_opts.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/netdb.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/dns.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/priv/nd6_priv.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/ip6_frag.h \
+  hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/mld6.h
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/opt.h:
+hev-socks5-tunnel-src/third-part/lwip/src/ports/include/lwipopts.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/debug.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/arch.h:
+hev-socks5-tunnel-src/third-part/lwip/src/ports/include/arch/cc.h:
+hev-socks5-tunnel-src/third-part/lwip/src/ports/include/arch/../../unix/include/cc.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/memp.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/priv/memp_std.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/priv/memp_priv.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/mem.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/priv/mem_priv.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/stats.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/sys.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/pbuf.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/err.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/raw.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/udp.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/netif.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/ip_addr.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/def.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/ip4_addr.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/ip6_addr.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/ip6_zone.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/ip.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/ip4.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/prot/ip4.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/ip6.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/prot/ip6.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/prot/ip.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/prot/udp.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/tcp.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/tcpbase.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/icmp.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/prot/icmp.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/icmp6.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/prot/icmp6.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/priv/tcp_priv.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/prot/tcp.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/altcp.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/ip4_frag.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/netbuf.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/api.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/priv/tcpip_priv.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/priv/api_msg.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/igmp.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/priv/sockets_priv.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/etharp.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/timeouts.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/netif/ppp/ppp_opts.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/netdb.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/dns.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/priv/nd6_priv.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/ip6_frag.h:
+hev-socks5-tunnel-src/third-part/lwip/src/include/lwip/mld6.h:
