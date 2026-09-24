@@ -267,16 +267,22 @@ func (t *Tunnel) handleUDPAssociate(c net.Conn) {
 		var payload []byte
 		switch buf[3] {
 		case 1:
-			if n < 10 { continue }
+			if n < 10 {
+				continue
+			}
 			dport = int(binary.BigEndian.Uint16(buf[8:10]))
 			payload = buf[10:n]
 		case 3:
 			l := int(buf[4])
-			if n < 7+l+2 { continue }
+			if n < 7+l+2 {
+				continue
+			}
 			dport = int(binary.BigEndian.Uint16(buf[5+l : 7+l]))
 			payload = buf[7+l : n]
 		case 4:
-			if n < 22 { continue }
+			if n < 22 {
+				continue
+			}
 			dport = int(binary.BigEndian.Uint16(buf[20:22]))
 			payload = buf[22:n]
 		default:
@@ -301,7 +307,6 @@ func (t *Tunnel) handleUDPAssociate(c net.Conn) {
 		}
 	}
 }
-
 
 // ---- SOCKS5 FWD_UDP (cmd 0x05) --------------------------------------------
 //

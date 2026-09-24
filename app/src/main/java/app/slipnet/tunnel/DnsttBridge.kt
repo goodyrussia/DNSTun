@@ -46,6 +46,10 @@ object DnsttBridge {
      * @param listenHost Local host for the SOCKS5 proxy (default: 127.0.0.1)
      * @return Result indicating success or failure
      */
+    /** Set by the VpnService: external files dir for the engine's log file. */
+    @Volatile
+    var logDir: String? = null
+
     fun startClient(
         dnsServer: String,
         tunnelDomain: String,
@@ -144,6 +148,14 @@ object DnsttBridge {
             }
             newClient.setResolverMode(resolverMode)
             newClient.setRRSpreadCount(rrSpreadCount.toLong())
+            // The engine is an in-process gomobile library: without this its
+            // log goes to stderr, which Android discards, and a device-side
+            // failure is invisible. Mirror it into this app's log too.
+            logDir?.let { dir ->
+                val path = newClient.setLogPath(dir)
+                Log.i(TAG, "engine log: $path (v${newClient.version()})")
+                EngineLogMirror.start(path)
+            }
             client = newClient
             currentPort = actualPort
 
@@ -187,6 +199,7 @@ object DnsttBridge {
         val c = client
         val port = if (c != null) currentPort else pendingReleasePort
 
+        EngineLogMirror.stop()
         if (c != null) {
             client = null  // Clear reference immediately to prevent new operations
             pendingReleasePort = port

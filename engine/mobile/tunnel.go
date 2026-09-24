@@ -2,7 +2,7 @@
 //
 // ARCHITECTURE (the pattern every shipping DNS-tunnel VPN uses):
 //
-//     VpnService TUN -> hev-socks5-tunnel -> SOCKS5 -> THIS -> DNS -> server
+//	VpnService TUN -> hev-socks5-tunnel -> SOCKS5 -> THIS -> DNS -> server
 //
 // hev-socks5-tunnel owns all packet handling. This program only has to speak
 // SOCKS5 on one side and the dnstun stream protocol on the other, which is why
@@ -37,7 +37,7 @@ const (
 	// upNACK asks the server for one specific downstream seq (carried in Seq).
 	// Without it a single dropped reply freezes the contiguous ack and the
 	// stream can never recover while new data keeps arriving.
-	upNACK    = 1 << 3
+	upNACK = 1 << 3
 
 	downSYNACK = 1 << 0
 	downFIN    = 1 << 1
@@ -45,6 +45,11 @@ const (
 
 	upHdrLen   = 9 // streamID(2) seq(2) flags(1) ack(2) nonce(2)
 	downHdrLen = 7
+
+	// maxUpQueue bounds the pending upstream queue. Past it, writers wait
+	// instead of dropping: a silently dropped fragment used to stall the
+	// stream permanently because retransmit could not keep up.
+	maxUpQueue = 8192
 )
 
 const b32alpha = "abcdefghijklmnopqrstuvwxyz234567"
@@ -169,7 +174,7 @@ func buildQuery(name string, qid uint16, edns int) []byte {
 	hdr := make([]byte, 12)
 	binary.BigEndian.PutUint16(hdr[0:], qid)
 	binary.BigEndian.PutUint16(hdr[2:], 0x0100) // RD
-	binary.BigEndian.PutUint16(hdr[4:], 1) // QDCOUNT
+	binary.BigEndian.PutUint16(hdr[4:], 1)      // QDCOUNT
 	// ARCOUNT must be 1 when we attach the OPT record, and it must be set
 	// BEFORE hdr is appended (append copies, so writing to hdr afterwards is a
 	// no-op). With ARCOUNT=0 a resolver ignores the OPT entirely, falls back to
@@ -187,13 +192,13 @@ func buildQuery(name string, qid uint16, edns int) []byte {
 	out = append(out, 0x00, 0x10) // TXT
 	out = append(out, 0x00, 0x01) // IN
 	if edns > 0 {
-		out = append(out, 0)                            // root
-		out = append(out, 0x00, 0x29)                   // OPT
-		var c [2]byte                                   //
-		binary.BigEndian.PutUint16(c[:], uint16(edns))  //
-		out = append(out, c[:]...)                      // udp size
-		out = append(out, 0, 0, 0, 0)                   // ttl
-		out = append(out, 0, 0)                         // rdlen
+		out = append(out, 0)                           // root
+		out = append(out, 0x00, 0x29)                  // OPT
+		var c [2]byte                                  //
+		binary.BigEndian.PutUint16(c[:], uint16(edns)) //
+		out = append(out, c[:]...)                     // udp size
+		out = append(out, 0, 0, 0, 0)                  // ttl
+		out = append(out, 0, 0)                        // rdlen
 	}
 	return out
 }
@@ -287,12 +292,16 @@ type Tunnel struct {
 	rr         uint32
 
 	// stats
-	qSent    int64
-	qRecv    int64
-	upBytes  int64
-	dnBytes  int64
-	retrans  int64
-	lastRecv int64
+	qSent     int64
+	qRecv     int64
+	upBytes   int64
+	dnBytes   int64
+	retrans   int64
+	lastRecv  int64
+	readErrs  int64
+	writeErrs int64
+	upDrops   int64
+	closed    int32
 	// lastActive is the last time real payload moved in either direction
 	// (not mere poll acks) -- the idle-backoff signal for pump().
 	lastActive int64
@@ -303,18 +312,18 @@ type Stream struct {
 	t    *Tunnel
 	conn net.Conn
 
-	mu       sync.Mutex
-	nextSeq  uint16
-	unacked  map[uint16][]byte // sent upstream, not yet acked
-	recvAck  uint16            // highest downstream seq seen
-	outOfOrd map[uint16][]byte // downstream received out of order
-	expectDn uint16
-	maxSeen  uint16 // highest downstream seq seen, for gap detection
+	mu        sync.Mutex
+	nextSeq   uint16
+	unacked   map[uint16][]byte // sent upstream, not yet acked
+	recvAck   uint16            // highest downstream seq seen
+	outOfOrd  map[uint16][]byte // downstream received out of order
+	expectDn  uint16
+	maxSeen   uint16 // highest downstream seq seen, for gap detection
 	upAckSeen uint16 // highest upstream seq the server has confirmed
 	target    string // dial target, so the SYN can be retransmitted
 	synAcked  bool   // server confirmed the stream exists
-	closed   bool
-	lastAct  time.Time
+	closed    bool
+	lastAct   time.Time
 }
 
 func NewTunnel(resolver, zone, sid, listenAddr string, chunk, depth, edns int) (*Tunnel, error) {
@@ -329,17 +338,17 @@ func NewTunnel(resolver, zone, sid, listenAddr string, chunk, depth, edns int) (
 	c.SetReadBuffer(4 << 20)
 	c.SetWriteBuffer(4 << 20)
 	return &Tunnel{
-		resolver: resolver,
-		zone:     zone,
-		sid:      sid,
-		chunk:    chunk,
-		depth:    depth,
-		edns:     edns,
+		resolver:  resolver,
+		zone:      zone,
+		sid:       sid,
+		chunk:     chunk,
+		depth:     depth,
+		edns:      edns,
 		socksAddr: listenAddr,
-		stop:     make(chan struct{}),
-		conn:     c,
-		inflight: make(map[uint16]*upFrag),
-		streams:  make(map[uint16]*Stream),
+		stop:      make(chan struct{}),
+		conn:      c,
+		inflight:  make(map[uint16]*upFrag),
+		streams:   make(map[uint16]*Stream),
 		// Start stream ids at a random point: the client counts from 1 on every
 		// run, and the server may still hold a stream with the same id from the
 		// previous run. A collision corrupts the new connection.
@@ -357,11 +366,22 @@ func (t *Tunnel) enqueue(f *upFrag) {
 	if len(f.data) > 0 {
 		atomic.StoreInt64(&t.lastActive, time.Now().Unix())
 	}
-	t.mu.Lock()
-	if len(t.up) < 4096 {
-		t.up = append(t.up, f)
+	for {
+		t.mu.Lock()
+		full := len(t.up) >= maxUpQueue
+		if !full || f.data == nil {
+			t.up = append(t.up, f)
+			t.mu.Unlock()
+			return
+		}
+		t.mu.Unlock()
+		// Payload must never be dropped: wait for the pump to drain instead.
+		atomic.AddInt64(&t.upDrops, 1)
+		if t.closing() {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
-	t.mu.Unlock()
 }
 
 // run drives the query/reply loop. This is the only place that touches the
@@ -372,7 +392,13 @@ func (t *Tunnel) run() {
 		for {
 			n, _, err := t.conn.ReadFromUDP(buf)
 			if err != nil {
-				return
+				if t.closing() {
+					return
+				}
+				atomic.AddInt64(&t.readErrs, 1)
+				log.Printf("engine: read err (kept alive): %v", err)
+				time.Sleep(20 * time.Millisecond)
+				continue
 			}
 			msg := make([]byte, n)
 			copy(msg, buf[:n])
@@ -404,6 +430,7 @@ func (t *Tunnel) run() {
 // Close shuts the tunnel down: the SOCKS listener, the UDP transport and the
 // background loops. Safe to call more than once.
 func (t *Tunnel) Close() {
+	atomic.StoreInt32(&t.closed, 1)
 	t.stopOnce.Do(func() {
 		close(t.stop)
 		if t.ln != nil {
@@ -413,6 +440,12 @@ func (t *Tunnel) Close() {
 			t.conn.Close()
 		}
 	})
+}
+
+// closing reports whether Close has been called (transient socket errors must
+// not be confused with shutdown).
+func (t *Tunnel) closing() bool {
+	return atomic.LoadInt32(&t.closed) == 1
 }
 
 // SetDepth changes the in-flight query window (the throughput lever).
@@ -476,15 +509,33 @@ func (t *Tunnel) pump() {
 		} else {
 			f = &upFrag{streamID: 0, seq: 0, flags: 0, ack: 0}
 		}
-		qid := uint16(rand.Intn(65535) + 1)
-		if _, busy := t.inflight[qid]; busy {
-			continue
+		qid := uint16(0)
+		for i := 0; i < 32; i++ {
+			cand := uint16(rand.Intn(65535) + 1)
+			if _, busy := t.inflight[cand]; !busy {
+				qid = cand
+				break
+			}
+		}
+		if qid == 0 {
+			// Window saturated by collisions: put the fragment back and stop.
+			if f.data != nil {
+				t.up = append([]*upFrag{f}, t.up...)
+			}
+			break
 		}
 		blob := b32Encode(f.encode())
 		name := buildName(blob, t.sid, t.zone)
 		pkt := buildQuery(name, qid, t.edns)
 		if _, err := t.conn.WriteToUDP(pkt, t.addr()); err != nil {
-			return
+			atomic.AddInt64(&t.writeErrs, 1)
+			if atomic.LoadInt64(&t.writeErrs)%200 == 1 {
+				log.Printf("engine: udp write err (kept alive): %v", err)
+			}
+			if f.data != nil {
+				t.up = append([]*upFrag{f}, t.up...)
+			}
+			break
 		}
 		f.sentAt = time.Now()
 		t.inflight[qid] = f
@@ -553,12 +604,25 @@ func (t *Tunnel) retransmit() {
 			s.mu.Unlock()
 			continue
 		}
-		data := s.unacked[lowest]
-		ack := s.recvAck
 		id := s.id
+		ack := s.recvAck
+		// Re-queue every fragment above the acked point, in order. One per
+		// tick could not keep up with a saturated window, so a single gap
+		// stalled an upload forever.
+		batch := make([]*upFrag, 0, 64)
+		for q := uint16(0); q < 64; q++ {
+			seq := lowest + q
+			data, ok := s.unacked[seq]
+			if !ok {
+				break
+			}
+			batch = append(batch, &upFrag{streamID: id, seq: seq, flags: 0, ack: ack, data: data})
+		}
 		s.mu.Unlock()
-		t.up = append(t.up, &upFrag{streamID: id, seq: lowest, flags: 0, ack: ack, data: data})
-		atomic.AddInt64(&t.retrans, 1)
+		for _, bf := range batch {
+			t.up = append(t.up, bf)
+			atomic.AddInt64(&t.retrans, 1)
+		}
 	}
 }
 
@@ -620,10 +684,20 @@ func (t *Tunnel) report() {
 	inflight := len(t.inflight)
 	streams := len(t.streams)
 	t.mu.Unlock()
-	log.Printf("STATS up=%.0fKB down=%.0fKB qrecv=%d streams=%d inflight=%d last=%s",
+	qsent := atomic.LoadInt64(&t.qSent)
+	qrecv := atomic.LoadInt64(&t.qRecv)
+	warn := ""
+	if r, w, d := atomic.LoadInt64(&t.readErrs), atomic.LoadInt64(&t.writeErrs), atomic.LoadInt64(&t.upDrops); r+w+d > 0 {
+		warn = fmt.Sprintf(" ERR read=%d write=%d blocked=%d", r, w, d)
+	}
+	loss := ""
+	if qsent > 0 {
+		loss = fmt.Sprintf(" loss=%.1f%%", 100*float64(qsent-qrecv)/float64(qsent))
+	}
+	log.Printf("STATS up=%.0fKB down=%.0fKB qsent=%d qrecv=%d streams=%d inflight=%d retrans=%d last=%s%s%s",
 		float64(atomic.LoadInt64(&t.upBytes))/1024,
 		float64(atomic.LoadInt64(&t.dnBytes))/1024,
-		atomic.LoadInt64(&t.qRecv), streams, inflight, ago)
+		qsent, qrecv, streams, inflight, atomic.LoadInt64(&t.retrans), ago, loss, warn)
 }
 
 // newStream registers a stream and sends the SYN carrying the target.

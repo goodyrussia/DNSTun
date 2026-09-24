@@ -12,8 +12,8 @@ package mobile
 // keeps repeat lookups (the majority on a phone) off the tunnel entirely.
 
 import (
-	"fmt"
 	"encoding/binary"
+	"fmt"
 	"log"
 	"math/rand"
 	"net"

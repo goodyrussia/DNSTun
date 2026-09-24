@@ -9,8 +9,8 @@ plugins {
     id("com.google.dagger.hilt.android")
 }
 
-val appVersionName = "6.0.0"
-val appVersionCode = 20
+val appVersionName = "6.0.1"
+val appVersionCode = 21
 
 // Signing configuration — keystore.properties lives at the repo root
 // (created locally, or written from secrets in CI).

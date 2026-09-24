@@ -546,6 +546,9 @@ class SlipNetVpnService : VpnService() {
 
         // Step 1: Set VpnService reference (for potential future use)
         DnsttBridge.setVpnService(this@SlipNetVpnService)
+        // Engine log lives in external files so it can be pulled off the phone
+        // without root; the mirror copies it into the in-app log too.
+        DnsttBridge.logDir = (getExternalFilesDir(null) ?: filesDir)?.absolutePath
 
         // Step 2: Establish VPN interface FIRST (with addDisallowedApplication for this app)
         // This ensures DNSTT's sockets bypass the VPN when created

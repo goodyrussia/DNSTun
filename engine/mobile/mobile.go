@@ -12,17 +12,21 @@ package mobile
 
 import (
 	"fmt"
+	"io"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 )
 
 const (
-	defaultSID   = "g7x2k9"
-	defaultChunk = 80
-	defaultDepth = 8192
-	deepDepth    = 12288
-	defaultEDNS  = 1300
+	engineVersion = "6.0.2-engine"
+	defaultSID    = "g7x2k9"
+	defaultChunk  = 56
+	defaultDepth  = 8192
+	deepDepth     = 12288
+	defaultEDNS   = 1000
 )
 
 // DnsttClient keeps the type name the app's bridge expects.
@@ -66,6 +70,33 @@ func NewClient(dnsAddr, tunnelDomain, publicKey, listenAddr string) (*DnsttClien
 	log.Printf("engine: resolver=%s zone=%s sid=%s listen=%s", resolver, zone, sid, listen)
 	return &DnsttClient{t: t, listenAddr: listen}, nil
 }
+
+// SetLogPath routes the engine's log to <dir>/engine.log as well as stderr.
+// Without it nothing the engine logs is visible on a device: an in-process
+// gomobile library writes to stderr, which Android throws away. The app calls
+// this before Start with getExternalFilesDir().
+func (c *DnsttClient) SetLogPath(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	path := filepath.Join(dir, "engine.log")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		log.Printf("engine: cannot open log %s: %v", path, err)
+		return ""
+	}
+	if st, err := f.Stat(); err == nil && st.Size() > 2<<20 {
+		f.Truncate(0)
+		f.Seek(0, io.SeekStart)
+	}
+	log.SetOutput(io.MultiWriter(os.Stderr, f))
+	log.Printf("engine: log -> %s", path)
+	return path
+}
+
+// Version is bumped by hand on every engine change so a device log says which
+// build produced it.
+func (c *DnsttClient) Version() string { return engineVersion }
 
 // Start binds the SOCKS5 listener and launches the transport loops. It fails
 // fast when the port is busy so the app can surface a real error instead of
@@ -140,12 +171,12 @@ func (c *DnsttClient) SetMaxPayload(size int64) {
 	}
 }
 
-func (c *DnsttClient) SetNoizMode(enabled bool)             {}
-func (c *DnsttClient) SetStealthMode(enabled bool)          {}
-func (c *DnsttClient) SetDeviceManufacturer(name string)    {}
+func (c *DnsttClient) SetNoizMode(enabled bool)              {}
+func (c *DnsttClient) SetStealthMode(enabled bool)           {}
+func (c *DnsttClient) SetDeviceManufacturer(name string)     {}
 func (c *DnsttClient) SetSocksCredentials(user, pass string) {}
-func (c *DnsttClient) SetEDNS0Size(size int64)              {}
-func (c *DnsttClient) SetUTLSFingerprint(fp string)         {}
+func (c *DnsttClient) SetEDNS0Size(size int64)               {}
+func (c *DnsttClient) SetUTLSFingerprint(fp string)          {}
 
 func (c *DnsttClient) SetResolverMode(mode string) { c.resolverMode = mode }
 func (c *DnsttClient) SetRRSpreadCount(n int64)    { c.rrSpread = n }

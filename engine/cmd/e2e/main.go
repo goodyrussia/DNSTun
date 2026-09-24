@@ -62,6 +62,12 @@ func main() {
 	} else {
 		fmt.Println("OK   dns-over-tcp: resolver reachable through tunnel")
 	}
+	if err := checkBulk(listen); err != nil {
+		fmt.Printf("FAIL bulk: %v\n", err)
+		ok = false
+	} else {
+		fmt.Println("OK   bulk: 512KB down + 256KB up, checksummed")
+	}
 	if !ok {
 		os.Exit(1)
 	}
@@ -262,7 +268,7 @@ func testQUICDrop(listen string) error {
 		return err
 	}
 	payload := []byte{0xc0, 0x00, 0x00, 0x00, 0x01, 0x08, 0x00, 0x00, 0x00, 0x00} // QUIC-ish
-	addr := []byte{1, 8, 8, 8, 8, 0x01, 0xbb}                                  // port 443
+	addr := []byte{1, 8, 8, 8, 8, 0x01, 0xbb}                                     // port 443
 	frame := append([]byte{byte(len(payload) >> 8), byte(len(payload) & 0xff), byte(3 + len(addr))}, addr...)
 	frame = append(frame, payload...)
 	if _, err := conn.Write(frame); err != nil {
