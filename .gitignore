@@ -1,0 +1,20 @@
+# Build outputs
+.gradle/
+build/
+app/build/
+*/build/
+
+# Local config
+local.properties
+keystore.properties
+*.jks
+*.keystore
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+
+# Caches
+engine/mobile-sources.jar
+app/libs/mobile-sources.jar

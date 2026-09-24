@@ -1,0 +1,6 @@
+# Application.mk for hev-socks5-tunnel
+
+APP_ABI := arm64-v8a
+APP_PLATFORM := android-24
+APP_OPTIM := release
+APP_STL := none

@@ -1,0 +1,589 @@
+package app.slipnet.presentation.settings
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import app.slipnet.data.local.datastore.DarkMode
+import app.slipnet.data.local.datastore.DnsWorkerMode
+import app.slipnet.data.local.datastore.DomainRoutingMode
+import app.slipnet.data.local.datastore.PreferencesDataStore
+import app.slipnet.data.local.datastore.SplitTunnelingMode
+import app.slipnet.data.local.datastore.SshCipher
+import app.slipnet.tunnel.GeoBypassCountry
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.launch
+import javax.inject.Inject
+
+data class SettingsUiState(
+    val autoConnectOnBoot: Boolean = false,
+    val darkMode: DarkMode = DarkMode.SYSTEM,
+    val debugLogging: Boolean = false,
+    val isLoading: Boolean = true,
+    // Proxy Settings
+    val proxyListenAddress: String = "127.0.0.1",
+    val proxyListenPort: Int = PreferencesDataStore.DEFAULT_PROXY_PORT,
+    val proxyAuthEnabled: Boolean = false,
+    val proxyAuthUsername: String = "",
+    val proxyAuthPassword: String = "",
+    val proxyOnlyMode: Boolean = false,
+    val killSwitch: Boolean = false,
+    val autoReconnect: Boolean = false,
+    val showNotificationTraffic: Boolean = true,
+    val sleepTimerMinutes: Int = 0,
+    // HTTP Proxy Settings
+    val httpProxyEnabled: Boolean = false,
+    val httpProxyPort: Int = 8080,
+    val appendHttpProxyToVpn: Boolean = false,
+    // Network Settings
+    val disableQuic: Boolean = true,
+    val blockIpv6: Boolean = true,
+    val vpnMtu: Int = 1280,
+    // Bandwidth Limiting (0 = unlimited, KB/s)
+    val uploadLimitKbps: Int = 0,
+    val downloadLimitKbps: Int = 0,
+    // Split Tunneling Settings
+    val splitTunnelingEnabled: Boolean = false,
+    val splitTunnelingMode: SplitTunnelingMode = SplitTunnelingMode.ALLOW,
+    val splitTunnelingApps: Set<String> = emptySet(),
+    // SSH Tunnel Settings
+    val sshCipher: SshCipher = SshCipher.AUTO,
+    val sshCompression: Boolean = false,
+    val sshMaxChannels: Int = 16,
+    val sshMaxChannelsIsCustom: Boolean = false,
+    val preventDnsFallback: Boolean = true,
+    // Domain Routing Settings
+    val domainRoutingEnabled: Boolean = false,
+    val domainRoutingMode: DomainRoutingMode = DomainRoutingMode.BYPASS,
+    val domainRoutingDomains: Set<String> = emptySet(),
+    // Geo-Bypass Settings
+    val geoBypassEnabled: Boolean = false,
+    val geoBypassCountry: GeoBypassCountry = GeoBypassCountry.IR,
+    // Global DNS Resolver Override
+    val globalResolverEnabled: Boolean = false,
+    val globalResolverList: String = "",
+    // Global DNS Pool (auto-pick top 10 working resolvers on DNSTT/NoizDNS/VayDNS connects)
+    val dnsPoolEnabled: Boolean = false,
+    val dnsPoolText: String = "",
+    val dnsPoolFullVerification: Boolean = false,
+    // DNS Worker Mode
+    val dnsWorkerMode: DnsWorkerMode = DnsWorkerMode.TWO,
+    // Remote DNS Settings
+    val remoteDnsMode: String = "default",
+    val customRemoteDns: String = "",
+    val customRemoteDnsFallback: String = "",
+    // Update checker
+    val updateCheckResult: UpdateCheckResult = UpdateCheckResult.IDLE
+)
+
+enum class UpdateCheckResult {
+    IDLE,
+    CHECKING,
+    UP_TO_DATE,
+    UPDATE_AVAILABLE,
+    ERROR
+}
+
+@HiltViewModel
+class SettingsViewModel @Inject constructor(
+    private val preferencesDataStore: PreferencesDataStore
+) : ViewModel() {
+
+    private val _uiState = MutableStateFlow(SettingsUiState())
+    val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
+
+    init {
+        loadSettings()
+    }
+
+    private fun loadSettings() {
+        viewModelScope.launch {
+            val mainFlow = combine(
+                preferencesDataStore.autoConnectOnBoot,
+                preferencesDataStore.darkMode,
+                preferencesDataStore.debugLogging,
+                preferencesDataStore.proxyListenAddress,
+                preferencesDataStore.proxyListenPort,
+                preferencesDataStore.disableQuic,
+                preferencesDataStore.vpnMtu
+            ) { values ->
+                arrayOf(values[0], values[1], values[2], values[3], values[4], values[5], values[6])
+            }
+
+            data class SshSettings(val cipher: SshCipher, val compression: Boolean, val maxChannels: Int, val maxChannelsIsCustom: Boolean, val preventDnsFallback: Boolean)
+            val sshFlow = combine(
+                preferencesDataStore.sshCipher,
+                preferencesDataStore.sshCompression,
+                preferencesDataStore.sshMaxChannels,
+                preferencesDataStore.sshMaxChannelsIsCustom,
+                preferencesDataStore.preventDnsFallback
+            ) { cipher, compression, maxChannels, isCustom, preventDns ->
+                SshSettings(cipher, compression, maxChannels, isCustom, preventDns)
+            }
+
+            val splitFlow = combine(
+                preferencesDataStore.splitTunnelingEnabled,
+                preferencesDataStore.splitTunnelingMode,
+                preferencesDataStore.splitTunnelingApps
+            ) { enabled, mode, apps ->
+                Triple(enabled, mode, apps)
+            }
+
+            data class ProxyAuthSettings(val enabled: Boolean, val username: String, val password: String)
+            val proxyAuthFlow = combine(
+                preferencesDataStore.proxyAuthEnabled,
+                preferencesDataStore.proxyAuthUsername,
+                preferencesDataStore.proxyAuthPassword
+            ) { enabled, username, password ->
+                ProxyAuthSettings(enabled, username, password)
+            }
+
+            data class ProxyOnlySettings(val proxyOnly: Boolean, val killSwitch: Boolean, val sleepTimer: Int, val autoReconnect: Boolean, val showNotificationTraffic: Boolean)
+            val proxyOnlyFlow = combine(
+                preferencesDataStore.proxyOnlyMode,
+                preferencesDataStore.killSwitch,
+                preferencesDataStore.sleepTimerMinutes,
+                preferencesDataStore.autoReconnect,
+                preferencesDataStore.showNotificationTraffic
+            ) { proxyOnly, killSwitch, sleepTimer, autoReconnect, showNotifTraffic ->
+                ProxyOnlySettings(proxyOnly, killSwitch, sleepTimer, autoReconnect, showNotifTraffic)
+            }
+
+            val httpProxyFlow = combine(
+                preferencesDataStore.httpProxyEnabled,
+                preferencesDataStore.httpProxyPort,
+                preferencesDataStore.appendHttpProxyToVpn
+            ) { enabled, port, appendToVpn ->
+                Triple(enabled, port, appendToVpn)
+            }
+
+            val domainRoutingFlow = combine(
+                preferencesDataStore.domainRoutingEnabled,
+                preferencesDataStore.domainRoutingMode,
+                preferencesDataStore.domainRoutingDomains
+            ) { enabled, mode, domains ->
+                Triple(enabled, mode, domains)
+            }
+
+            val geoBypassFlow = combine(
+                preferencesDataStore.geoBypassEnabled,
+                preferencesDataStore.geoBypassCountry
+            ) { enabled, countryCode ->
+                Pair(enabled, GeoBypassCountry.fromCode(countryCode))
+            }
+
+            val remoteDnsFlow = combine(
+                preferencesDataStore.remoteDnsMode,
+                preferencesDataStore.customRemoteDns,
+                preferencesDataStore.customRemoteDnsFallback
+            ) { mode, customDns, customFallback ->
+                Triple(mode, customDns, customFallback)
+            }
+
+            val baseFlow = combine(mainFlow, sshFlow, splitFlow, proxyOnlyFlow, httpProxyFlow) { main, ssh, split, proxyOnlySettings, httpProxy ->
+                SettingsUiState(
+                    autoConnectOnBoot = main[0] as Boolean,
+                    darkMode = main[1] as DarkMode,
+                    debugLogging = main[2] as Boolean,
+                    isLoading = false,
+                    proxyListenAddress = main[3] as String,
+                    proxyListenPort = main[4] as Int,
+                    proxyOnlyMode = proxyOnlySettings.proxyOnly,
+                    killSwitch = proxyOnlySettings.killSwitch,
+                    autoReconnect = proxyOnlySettings.autoReconnect,
+                    showNotificationTraffic = proxyOnlySettings.showNotificationTraffic,
+                    sleepTimerMinutes = proxyOnlySettings.sleepTimer,
+                    httpProxyEnabled = httpProxy.first,
+                    httpProxyPort = httpProxy.second,
+                    appendHttpProxyToVpn = httpProxy.third,
+                    disableQuic = main[5] as Boolean,
+                    vpnMtu = main[6] as Int,
+                    splitTunnelingEnabled = split.first,
+                    splitTunnelingMode = split.second,
+                    splitTunnelingApps = split.third,
+                    sshCipher = ssh.cipher,
+                    sshCompression = ssh.compression,
+                    sshMaxChannels = ssh.maxChannels,
+                    sshMaxChannelsIsCustom = ssh.maxChannelsIsCustom,
+                    preventDnsFallback = ssh.preventDnsFallback
+                )
+            }
+
+            val routingFlow = combine(baseFlow, domainRoutingFlow) { base, domainRouting ->
+                base.copy(
+                    domainRoutingEnabled = domainRouting.first,
+                    domainRoutingMode = domainRouting.second,
+                    domainRoutingDomains = domainRouting.third
+                )
+            }
+
+            val withGeoFlow = combine(routingFlow, geoBypassFlow) { state, geoBypass ->
+                state.copy(
+                    geoBypassEnabled = geoBypass.first,
+                    geoBypassCountry = geoBypass.second
+                )
+            }
+
+            val globalResolverFlow = combine(
+                preferencesDataStore.globalResolverEnabled,
+                preferencesDataStore.globalResolverList
+            ) { enabled, list -> Pair(enabled, list) }
+
+            val dnsPoolFlow = combine(
+                preferencesDataStore.dnsPoolEnabled,
+                preferencesDataStore.dnsPoolText,
+                preferencesDataStore.dnsPoolFullVerification
+            ) { enabled, text, fullVerification -> Triple(enabled, text, fullVerification) }
+
+            val bandwidthFlow = combine(
+                preferencesDataStore.uploadLimitKbps,
+                preferencesDataStore.downloadLimitKbps
+            ) { up, down -> Pair(up, down) }
+
+            combine(withGeoFlow, remoteDnsFlow, globalResolverFlow, preferencesDataStore.dnsWorkerMode, preferencesDataStore.blockIpv6) { state, remoteDns, globalResolver, workerMode, blockIpv6 ->
+                state.copy(
+                    dnsWorkerMode = workerMode,
+                    blockIpv6 = blockIpv6,
+                    remoteDnsMode = remoteDns.first,
+                    customRemoteDns = remoteDns.second,
+                    customRemoteDnsFallback = remoteDns.third,
+                    globalResolverEnabled = globalResolver.first,
+                    globalResolverList = globalResolver.second
+                )
+            }.combine(bandwidthFlow) { state, bandwidth ->
+                state.copy(
+                    uploadLimitKbps = bandwidth.first,
+                    downloadLimitKbps = bandwidth.second
+                )
+            }.combine(proxyAuthFlow) { state, proxyAuth ->
+                state.copy(
+                    proxyAuthEnabled = proxyAuth.enabled,
+                    proxyAuthUsername = proxyAuth.username,
+                    proxyAuthPassword = proxyAuth.password
+                )
+            }.combine(dnsPoolFlow) { state, pool ->
+                state.copy(
+                    dnsPoolEnabled = pool.first,
+                    dnsPoolText = pool.second,
+                    dnsPoolFullVerification = pool.third
+                )
+            }.collect { newState ->
+                // Preserve update check state across DataStore re-emissions
+                _uiState.value = newState.copy(updateCheckResult = _uiState.value.updateCheckResult)
+            }
+        }
+    }
+
+    fun setAutoConnectOnBoot(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesDataStore.setAutoConnectOnBoot(enabled)
+        }
+    }
+
+    fun setDarkMode(mode: DarkMode) {
+        viewModelScope.launch {
+            preferencesDataStore.setDarkMode(mode)
+        }
+    }
+
+    fun setDebugLogging(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesDataStore.setDebugLogging(enabled)
+        }
+    }
+
+    // Proxy-Only Mode
+    fun setProxyOnlyMode(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesDataStore.setProxyOnlyMode(enabled)
+        }
+    }
+
+    // Kill Switch
+    fun setKillSwitch(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesDataStore.setKillSwitch(enabled)
+        }
+    }
+
+    // Auto-Reconnect
+    fun setAutoReconnect(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesDataStore.setAutoReconnect(enabled)
+        }
+    }
+
+    // Notification Traffic Counter
+    fun setShowNotificationTraffic(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesDataStore.setShowNotificationTraffic(enabled)
+        }
+    }
+
+    // Sleep Timer
+    fun setSleepTimerMinutes(minutes: Int) {
+        viewModelScope.launch {
+            preferencesDataStore.setSleepTimerMinutes(minutes)
+        }
+    }
+
+    fun setBlockIpv6(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesDataStore.setBlockIpv6(enabled)
+        }
+    }
+
+    // DNS Worker Mode
+    fun setDnsWorkerMode(mode: DnsWorkerMode) {
+        viewModelScope.launch {
+            preferencesDataStore.setDnsWorkerMode(mode)
+        }
+    }
+
+    // Network Settings
+    fun setDisableQuic(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesDataStore.setDisableQuic(enabled)
+        }
+    }
+
+    fun setVpnMtu(mtu: Int) {
+        viewModelScope.launch {
+            preferencesDataStore.setVpnMtu(mtu)
+        }
+    }
+
+    // Bandwidth Limiting
+    fun setUploadLimitKbps(kbps: Int) {
+        viewModelScope.launch {
+            preferencesDataStore.setUploadLimitKbps(kbps)
+        }
+    }
+
+    fun setDownloadLimitKbps(kbps: Int) {
+        viewModelScope.launch {
+            preferencesDataStore.setDownloadLimitKbps(kbps)
+        }
+    }
+
+    // Proxy Settings
+    fun setProxyListenAddress(address: String) {
+        viewModelScope.launch {
+            preferencesDataStore.setProxyListenAddress(address)
+        }
+    }
+
+    fun setProxyListenPort(port: Int) {
+        if (port == _uiState.value.httpProxyPort) return
+        viewModelScope.launch {
+            preferencesDataStore.setProxyListenPort(port)
+        }
+    }
+
+    // Proxy Auth
+    fun setProxyAuthEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesDataStore.setProxyAuthEnabled(enabled)
+        }
+    }
+
+    fun setProxyAuthUsername(username: String) {
+        viewModelScope.launch {
+            preferencesDataStore.setProxyAuthUsername(username)
+        }
+    }
+
+    fun setProxyAuthPassword(password: String) {
+        viewModelScope.launch {
+            preferencesDataStore.setProxyAuthPassword(password)
+        }
+    }
+
+    // Split Tunneling Settings
+    fun setSplitTunnelingEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesDataStore.setSplitTunnelingEnabled(enabled)
+        }
+    }
+
+    fun setSplitTunnelingMode(mode: SplitTunnelingMode) {
+        viewModelScope.launch {
+            preferencesDataStore.setSplitTunnelingMode(mode)
+        }
+    }
+
+    // SSH Tunnel Settings
+    fun setSshCipher(cipher: SshCipher) {
+        viewModelScope.launch {
+            preferencesDataStore.setSshCipher(cipher)
+        }
+    }
+
+    fun setSshCompression(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesDataStore.setSshCompression(enabled)
+        }
+    }
+
+    fun setSshMaxChannels(count: Int) {
+        viewModelScope.launch {
+            preferencesDataStore.setSshMaxChannels(count)
+        }
+    }
+
+    fun resetSshMaxChannelsToAuto() {
+        viewModelScope.launch {
+            preferencesDataStore.resetSshMaxChannelsToAuto()
+        }
+    }
+
+    fun setPreventDnsFallback(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesDataStore.setPreventDnsFallback(enabled)
+        }
+    }
+
+    // HTTP Proxy Settings
+    fun setHttpProxyEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesDataStore.setHttpProxyEnabled(enabled)
+        }
+    }
+
+    fun setHttpProxyPort(port: Int) {
+        if (port == _uiState.value.proxyListenPort) return
+        viewModelScope.launch {
+            preferencesDataStore.setHttpProxyPort(port)
+        }
+    }
+
+    fun setAppendHttpProxyToVpn(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesDataStore.setAppendHttpProxyToVpn(enabled)
+        }
+    }
+
+    // Domain Routing Settings
+    fun setDomainRoutingEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesDataStore.setDomainRoutingEnabled(enabled)
+        }
+    }
+
+    fun setDomainRoutingMode(mode: DomainRoutingMode) {
+        viewModelScope.launch {
+            preferencesDataStore.setDomainRoutingMode(mode)
+        }
+    }
+
+    fun addDomainRoutingDomain(domain: String) {
+        viewModelScope.launch {
+            val current = _uiState.value.domainRoutingDomains
+            val normalized = domain.lowercase().trim().trimEnd('.')
+            if (normalized.isNotEmpty()) {
+                preferencesDataStore.setDomainRoutingDomains(current + normalized)
+            }
+        }
+    }
+
+    fun removeDomainRoutingDomain(domain: String) {
+        viewModelScope.launch {
+            val current = _uiState.value.domainRoutingDomains
+            preferencesDataStore.setDomainRoutingDomains(current - domain)
+        }
+    }
+
+    // Geo-Bypass Settings
+    fun setGeoBypassEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesDataStore.setGeoBypassEnabled(enabled)
+        }
+    }
+
+    fun setGeoBypassCountry(country: GeoBypassCountry) {
+        viewModelScope.launch {
+            preferencesDataStore.setGeoBypassCountry(country.code)
+        }
+    }
+
+    // Remote DNS Settings
+    fun setGlobalResolverEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesDataStore.setGlobalResolverEnabled(enabled)
+        }
+    }
+
+    fun setGlobalResolverList(list: String) {
+        viewModelScope.launch {
+            preferencesDataStore.setGlobalResolverList(list)
+        }
+    }
+
+    fun setDnsPoolEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesDataStore.setDnsPoolEnabled(enabled)
+        }
+    }
+
+    fun setDnsPoolText(text: String) {
+        viewModelScope.launch {
+            preferencesDataStore.setDnsPoolText(text)
+        }
+    }
+
+    fun setDnsPoolFullVerification(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesDataStore.setDnsPoolFullVerification(enabled)
+        }
+    }
+
+    fun setRemoteDnsMode(mode: String) {
+        viewModelScope.launch {
+            preferencesDataStore.setRemoteDnsMode(mode)
+        }
+    }
+
+    fun setCustomRemoteDns(dns: String) {
+        viewModelScope.launch {
+            preferencesDataStore.setCustomRemoteDns(dns)
+        }
+    }
+
+    fun setCustomRemoteDnsFallback(dns: String) {
+        viewModelScope.launch {
+            preferencesDataStore.setCustomRemoteDnsFallback(dns)
+        }
+    }
+
+    // Reset All Settings
+    fun resetAllSettings() {
+        viewModelScope.launch {
+            preferencesDataStore.resetAllSettings()
+        }
+    }
+
+    // ── Update Checker ──────────────────────────────────────────────────
+
+    var availableUpdate: app.slipnet.util.AppUpdate? = null
+        private set
+
+    fun checkForUpdate() {
+        _uiState.value = _uiState.value.copy(updateCheckResult = UpdateCheckResult.CHECKING)
+        viewModelScope.launch {
+            val current = app.slipnet.BuildConfig.VERSION_NAME
+            val update = app.slipnet.util.UpdateChecker.check(current)
+            availableUpdate = update
+            preferencesDataStore.setLastUpdateCheckTime(System.currentTimeMillis())
+            _uiState.value = _uiState.value.copy(
+                updateCheckResult = if (update != null) UpdateCheckResult.UPDATE_AVAILABLE
+                else UpdateCheckResult.UP_TO_DATE
+            )
+        }
+    }
+
+    fun clearUpdateCheck() {
+        _uiState.value = _uiState.value.copy(updateCheckResult = UpdateCheckResult.IDLE)
+    }
+}
