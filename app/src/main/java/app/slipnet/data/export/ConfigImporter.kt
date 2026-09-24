@@ -361,7 +361,7 @@ class ConfigImporter @Inject constructor() {
         }
 
         val tunnelTypeStr = fields[1]
-        val tunnelType = when (mode) {
+        val tunnelType = when (tunnelTypeStr) {
             MODE_DNSTT -> TunnelType.DNSTT
             else -> TunnelType.DNSTT
         }
@@ -431,7 +431,7 @@ class ConfigImporter @Inject constructor() {
         }
 
         val tunnelTypeStr = fields[1]
-        val tunnelType = when (mode) {
+        val tunnelType = when (tunnelTypeStr) {
             MODE_DNSTT -> TunnelType.DNSTT
             else -> TunnelType.DNSTT
         }
@@ -506,7 +506,7 @@ class ConfigImporter @Inject constructor() {
         }
 
         val tunnelTypeStr = fields[1]
-        val tunnelType = when (mode) {
+        val tunnelType = when (tunnelTypeStr) {
             MODE_DNSTT -> TunnelType.DNSTT
             else -> TunnelType.DNSTT
         }
@@ -584,7 +584,7 @@ class ConfigImporter @Inject constructor() {
         }
 
         val tunnelTypeStr = fields[1]
-        val tunnelType = when (mode) {
+        val tunnelType = when (tunnelTypeStr) {
             MODE_DNSTT -> TunnelType.DNSTT
             else -> TunnelType.DNSTT
         }
@@ -665,7 +665,7 @@ class ConfigImporter @Inject constructor() {
         }
 
         val tunnelTypeStr = fields[1]
-        val tunnelType = when (mode) {
+        val tunnelType = when (tunnelTypeStr) {
             MODE_DNSTT -> TunnelType.DNSTT
             else -> TunnelType.DNSTT
         }
@@ -746,7 +746,7 @@ class ConfigImporter @Inject constructor() {
         }
 
         val tunnelTypeStr = fields[1]
-        val tunnelType = when (mode) {
+        val tunnelType = when (tunnelTypeStr) {
             MODE_DNSTT -> TunnelType.DNSTT
             else -> TunnelType.DNSTT
         }
@@ -823,7 +823,7 @@ class ConfigImporter @Inject constructor() {
         }
 
         val tunnelTypeStr = fields[1]
-        val tunnelType = when (mode) {
+        val tunnelType = when (tunnelTypeStr) {
             MODE_DNSTT -> TunnelType.DNSTT
             else -> TunnelType.DNSTT
         }
@@ -902,7 +902,7 @@ class ConfigImporter @Inject constructor() {
         }
 
         val tunnelTypeStr = fields[1]
-        val tunnelType = when (mode) {
+        val tunnelType = when (tunnelTypeStr) {
             MODE_DNSTT -> TunnelType.DNSTT
             else -> TunnelType.DNSTT
         }
@@ -1009,7 +1009,7 @@ class ConfigImporter @Inject constructor() {
         }
 
         val tunnelTypeStr = fields[1]
-        val tunnelType = when (mode) {
+        val tunnelType = when (tunnelTypeStr) {
             MODE_DNSTT -> TunnelType.DNSTT
             else -> TunnelType.DNSTT
         }
@@ -1115,7 +1115,7 @@ class ConfigImporter @Inject constructor() {
         }
 
         val tunnelTypeStr = fields[1]
-        val tunnelType = when (mode) {
+        val tunnelType = when (tunnelTypeStr) {
             MODE_DNSTT -> TunnelType.DNSTT
             else -> TunnelType.DNSTT
         }
@@ -1228,7 +1228,7 @@ class ConfigImporter @Inject constructor() {
         }
 
         val tunnelTypeStr = fields[1]
-        val tunnelType = when (mode) {
+        val tunnelType = when (tunnelTypeStr) {
             MODE_DNSTT -> TunnelType.DNSTT
             else -> TunnelType.DNSTT
         }
@@ -1342,7 +1342,7 @@ class ConfigImporter @Inject constructor() {
         }
 
         val tunnelTypeStr = fields[1]
-        val tunnelType = when (mode) {
+        val tunnelType = when (tunnelTypeStr) {
             MODE_DNSTT -> TunnelType.DNSTT
             else -> TunnelType.DNSTT
         }
@@ -1463,7 +1463,7 @@ class ConfigImporter @Inject constructor() {
         }
 
         val tunnelTypeStr = fields[1]
-        val tunnelType = when (mode) {
+        val tunnelType = when (tunnelTypeStr) {
             MODE_DNSTT -> TunnelType.DNSTT
             else -> TunnelType.DNSTT
         }

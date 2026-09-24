@@ -15,7 +15,6 @@ import app.slipnet.tunnel.DnsPoolScanState
 import app.slipnet.tunnel.DnsPoolScanner
 import app.slipnet.tunnel.DnsttBridge
 import app.slipnet.tunnel.HevSocks5Tunnel
-import app.slipnet.tunnel.ResolverConfig
 import app.slipnet.tunnel.DnsttSocksBridge
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -612,6 +611,14 @@ class VpnRepositoryImpl @Inject constructor(
 
         sent = DnsttSocksBridge.getTunnelTxBytes()
         received = DnsttSocksBridge.getTunnelRxBytes()
+        if (sent == 0L && received == 0L) {
+            // Engine not running yet — fall back to TUN-level counters.
+            HevSocks5Tunnel.getStats()?.let { stats ->
+                sent = stats.txBytes
+                received = stats.rxBytes
+                pktSent = stats.txPackets
+                pktReceived = stats.rxPackets
+            }
         }
 
         // Compute speed normalized by actual elapsed time
@@ -638,5 +645,29 @@ class VpnRepositoryImpl @Inject constructor(
             uploadSpeed = upSpeed,
             downloadSpeed = downSpeed
         )
+    }
+
+    override suspend fun disconnect(): Result<Unit> {
+        if (_connectionState.value is ConnectionState.Disconnected) {
+            return Result.success(Unit)
+        }
+
+        _connectionState.value = ConnectionState.Disconnecting
+
+        try {
+            // Stop hev-socks5-tunnel first, then the engine behind it.
+            HevSocks5Tunnel.stop()
+            stopCurrentProxy()
+
+            currentTunFd = null
+            _connectionState.value = ConnectionState.Disconnected
+            connectedProfile = null
+            Log.i(TAG, "Tunnel stopped successfully")
+            return Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping tunnel", e)
+            _connectionState.value = ConnectionState.Error(e.message ?: "Unknown error")
+            return Result.failure(e)
+        }
     }
 }

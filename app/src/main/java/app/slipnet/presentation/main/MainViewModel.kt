@@ -956,3 +956,4 @@ class MainViewModel @Inject constructor(
         }
         return PingResult.Error(lastError)
     }
+}

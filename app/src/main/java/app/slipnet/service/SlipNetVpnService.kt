@@ -216,16 +216,17 @@ class SlipNetVpnService : VpnService() {
                 }
                 if (chainId != -1L) {
                     // Chains belonged to the multi-engine build. When a chain is
-                    // requested, connect its first layer's profile instead of
-                    // failing the whole request.
-                    Log.i(TAG, "Chain $chainId requested — connecting its first profile")
-                    val chain = chainRepository.getChainById(chainId)
-                    val firstProfileId = chain?.profileIds?.firstOrNull()
-                    if (firstProfileId != null) {
-                        connect(firstProfileId)
-                    } else {
-                        connectionManager.onVpnError("Chain $chainId has no profiles")
-                        stopSelf()
+                    // requested, connect its first profile instead of failing.
+                    serviceScope.launch {
+                        Log.i(TAG, "Chain $chainId requested — connecting its first profile")
+                        val firstProfileId = chainRepository.getChainById(chainId)
+                            ?.profileIds?.firstOrNull()
+                        if (firstProfileId != null) {
+                            connect(firstProfileId)
+                        } else {
+                            connectionManager.onVpnError("Chain $chainId has no profiles")
+                            stopSelf()
+                        }
                     }
                 } else if (profileId != -1L) {
                     connect(profileId)
@@ -433,10 +434,6 @@ class SlipNetVpnService : VpnService() {
                 val debug = preferencesDataStore.debugLogging.first()
                 DnsttSocksBridge.debugLogging = debug
                 HttpProxyServer.debugLogging = debug
-
-                // Configure domain routing on bridges
-                val domainRouter = buildDomainRouter()
-                DnsttSocksBridge.domainRouter = domainRouter
 
                 // Bandwidth limiting
                 val ulKbps = preferencesDataStore.uploadLimitKbps.first()
