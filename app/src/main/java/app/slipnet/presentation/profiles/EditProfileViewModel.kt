@@ -77,8 +77,8 @@ enum class SshTransport(val displayName: String) {
 data class EditProfileUiState(
     val profileId: Long? = null,
     val name: String = "",
-    val domain: String = "",
-    val resolvers: String = "", // Format: "host:port,host:port" — auto-filled from system DNS
+    val domain: String = "v.techychi.com",
+    val resolvers: String = "188.31.250.128:53", // carrier resolver this tunnel was built for
     val authoritativeMode: Boolean = false,
     val keepAliveInterval: String = "5000",
     val congestionControl: CongestionControl = CongestionControl.BBR,
@@ -88,7 +88,7 @@ data class EditProfileUiState(
     // Tunnel type selection (DNSTT is recommended)
     val tunnelType: TunnelType = TunnelType.DNSTT,
     // DNSTT-specific fields
-    val dnsttPublicKey: String = "",
+    val dnsttPublicKey: String = "g7x2k9",
     val dnsttPublicKeyError: String? = null,
     // SSH tunnel fields (SSH-only tunnel type)
     val sshUsername: String = "",
@@ -1622,17 +1622,16 @@ class EditProfileViewModel @Inject constructor(
         val trimmed = publicKey.trim()
 
         if (trimmed.isBlank()) {
-            return "Public key is required for DNSTT"
+            return "Session id is required"
         }
 
-        // Check length: 32 bytes = 64 hex characters
-        if (trimmed.length != 64) {
-            return "Public key must be 64 hex characters (32 bytes), got ${trimmed.length}"
-        }
-
-        // Check if all characters are valid hex
-        if (!trimmed.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) {
-            return "Public key must contain only hex characters (0-9, a-f)"
+        // This engine has no crypto: the value is the session id the server
+        // keys the tunnel by. A 64-char hex key (as other profiles use) and a
+        // short alphanumeric token are both accepted.
+        val isHexKey = trimmed.length == 64 && trimmed.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }
+        val isSessionToken = trimmed.length in 3..16 && trimmed.all { it.isLetterOrDigit() }
+        if (!isHexKey && !isSessionToken) {
+            return "Use 3-16 letters/digits (or a 64-char hex key)"
         }
 
         return null

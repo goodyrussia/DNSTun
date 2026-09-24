@@ -1569,11 +1569,11 @@ fun EditProfileScreen(
                     OutlinedTextField(
                         value = uiState.dnsttPublicKey,
                         onValueChange = { viewModel.updateDnsttPublicKey(it) },
-                        label = { Text("Public Key") },
-                        placeholder = { Text("Server's Noise public key (hex)") },
+                        label = { Text("Session ID") },
+                        placeholder = { Text("g7x2k9") },
                         isError = uiState.dnsttPublicKeyError != null,
                         supportingText = {
-                            Text(uiState.dnsttPublicKeyError ?: "Server's Noise protocol public key in hex format")
+                            Text(uiState.dnsttPublicKeyError ?: "Names the tunnel session on the server")
                         },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()

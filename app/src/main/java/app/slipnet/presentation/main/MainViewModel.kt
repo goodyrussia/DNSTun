@@ -280,9 +280,32 @@ class MainViewModel @Inject constructor(
         viewModelScope.launch {
             val done = preferencesDataStore.firstLaunchDone.first()
             if (!done) {
+                seedDefaultProfile()
                 _uiState.value = _uiState.value.copy(showFirstLaunchAbout = true)
             }
         }
+    }
+
+    /**
+     * Ship a working profile on first run: this build's tunnel zone plus the
+     * carrier resolver it was made for, so the app is usable without typing
+     * anything.
+     */
+    private suspend fun seedDefaultProfile() {
+        runCatching {
+            if (profileRepository.getAllProfiles().first().isEmpty()) {
+                profileRepository.saveProfile(
+                    ServerProfile(
+                        name = "DNSTun",
+                        domain = "v.techychi.com",
+                        resolvers = listOf(DnsResolver(host = "188.31.250.128", port = 53)),
+                        tunnelType = TunnelType.DNSTT,
+                        dnsttPublicKey = "g7x2k9",
+                        isActive = true
+                    )
+                )
+            }
+        }.onFailure { android.util.Log.w("MainViewModel", "default profile seed failed: ${it.message}") }
     }
 
     fun dismissFirstLaunchAbout() {
