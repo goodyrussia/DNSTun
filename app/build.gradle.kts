@@ -10,8 +10,8 @@ android {
         applicationId = "com.dnstun.app"
         minSdk = 26
         targetSdk = 37
-        versionCode = 12
-        versionName = "5.0.0"
+        versionCode = 13
+        versionName = "5.0.1"
     }
 
     signingConfigs {
