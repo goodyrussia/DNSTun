@@ -46,7 +46,9 @@ class DnstunService : VpnService() {
         const val TUN_ADDR = "10.111.0.2"
         const val TUN_PREFIX = 32
         const val TUN_MTU = 1500
-        const val TUN_DNS = "1.1.1.1"
+        // TUN DNS points at the engine's local forwarder; it resolves every
+        // query as DNS-over-TCP THROUGH the tunnel (see client2/dns.go).
+        const val TUN_DNS = "10.111.0.1"
 
         @Volatile var running = false
             private set
@@ -119,6 +121,7 @@ class DnstunService : VpnService() {
             "-chunk", cfg.maxChunk.toString(),
             "-depth", cfg.startDepth.toString(),
             "-edns", cfg.edns.toString(),
+            "-dns", "127.0.0.1:5353",
         )
         Log.i(TAG, "engine: ${cmd.joinToString(" ")}")
         val p = try {
