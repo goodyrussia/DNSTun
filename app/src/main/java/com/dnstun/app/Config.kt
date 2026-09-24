@@ -14,16 +14,16 @@ data class Config(
     val vip: String = "10.78.0.2",
     val mtu: Int = 600,
     val edns: Int = 1300,
-    val startDepth: Int = 128,
+    val startDepth: Int = 8192,
     val minDepth: Int = 16,
     /** Sweep-proven: 128 gives 440 replies/s, 192 drops to 118/s with
      *  21% loss, 256 collapses to 7/s. Never climb past 160. */
-    val maxDepth: Int = 160,
+    val maxDepth: Int = 12288,
     /** Upstream bytes per query. Sweep-proven on the Smarty resolver:
      *  120 bytes -> 224-char dotted name / 226 wire, accepted.
      *  140 bytes -> 258 wire, EXCEEDS the 255-byte DNS wire limit and is
      *  rejected as malformed. 120 is the practical maximum. */
-    val maxChunk: Int = 120,
+    val maxChunk: Int = 80,
     /** Local SOCKS5 port our engine opens; hev-socks5-tunnel dials it. */
     val socksPort: Int = 7300,
 ) {

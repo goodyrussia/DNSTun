@@ -5,33 +5,23 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
+import android.net.LocalSocket
+import android.net.LocalSocketAddress
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
-import hev.htproxy.TProxyService
 import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * The tunnel, assembled the way shipping DNS-tunnel VPNs do it.
- *
- *   VpnService TUN fd
- *     -> libhev-socks5-tunnel  (C bridge: owns ALL tun/TCP/UDP work)
- *       -> SOCKS5 on 127.0.0.1:<socksPort>
- *         -> libdnstun.so      (our own stream engine: SOCKS5 -> DNS tunnel)
- *           -> DNS tunnel -> our dnstund server on the VPS -> internet
- *
- * No hand-rolled packet code: the bridge owns the TUN, we only supply a SOCKS5
- * upstream. Two details that matter:
- *  - TUN is non-blocking and we exclude ourselves with addDisallowedApplication,
- *    so the engine's own DNS queries ride the real network instead of looping
- *    back into our own VPN (this is why no protect() call is needed).
- *  - The engine ships as jniLibs/arm64-v8a/libdnstun.so because Android 10+
- *    forbids executing files from the app data dir; nativeLibraryDir is
- *    executable.
+ * Hamara-style path:
+ *   VpnService TUN -> libtun2socks.so (BadVPN 1.999.127)
+ *     --dnsgw 127.0.0.1:5353  (DNS never through SOCKS UDP)
+ *     --socks 127.0.0.1:7300  (TCP only)
+ *       -> libdnstun.so -> unique-qname DNS tunnel -> dnsfast on the VPS
  */
 class DnstunService : VpnService() {
 
@@ -44,10 +34,10 @@ class DnstunService : VpnService() {
         private const val NOTIF_ID = 1
 
         const val TUN_ADDR = "10.111.0.2"
-        const val TUN_PREFIX = 32
-        const val TUN_MTU = 1500
-        // TUN DNS points at the engine's local forwarder; it resolves every
-        // query as DNS-over-TCP THROUGH the tunnel (see client2/dns.go).
+        const val TUN_GW = "10.111.0.1"
+        const val TUN_MASK = "255.255.255.0"
+        const val TUN_PREFIX = 24
+        const val TUN_MTU = 512
         const val TUN_DNS = "10.111.0.1"
 
         @Volatile var running = false
@@ -59,6 +49,7 @@ class DnstunService : VpnService() {
 
     private var pfd: ParcelFileDescriptor? = null
     @Volatile private var engine: Process? = null
+    @Volatile private var t2s: Process? = null
     private val stopping = AtomicBoolean(false)
     private var statsThread: Thread? = null
 
@@ -80,9 +71,8 @@ class DnstunService : VpnService() {
     private fun startTunnel() {
         if (running) return
         val cfg = Config.load(this)
-        Log.i(TAG, "start: resolver=${cfg.resolver}:${cfg.port} zone=${cfg.zone} sid=${cfg.sid} chunk=${cfg.maxChunk} depth=${cfg.startDepth}")
+        Log.i(TAG, "start tun2socks: resolver=${cfg.resolver} zone=${cfg.zone} sid=${cfg.sid} depth=${cfg.startDepth}")
 
-        // ---- 1. TUN ----------------------------------------------------------
         val builder = Builder()
             .setSession("DNSTun")
             .setMtu(TUN_MTU)
@@ -103,15 +93,17 @@ class DnstunService : VpnService() {
         }
         pfd = fd
 
-        // ---- 2. engine binary ------------------------------------------------
         val enginePath = File(applicationInfo.nativeLibraryDir, "libdnstun.so").absolutePath
         if (!File(enginePath).exists()) {
             fail("engine missing: $enginePath")
             return
         }
-        // ---- 3. start the engine --------------------------------------------
-        // Our own engine. No pubkey: this protocol has no crypto on purpose
-        // (speed only), and it authenticates by sid.
+        val t2sPath = File(applicationInfo.nativeLibraryDir, "libtun2socks.so").absolutePath
+        if (!File(t2sPath).exists()) {
+            fail("tun2socks missing: $t2sPath")
+            return
+        }
+
         val cmd = listOf(
             enginePath,
             "-resolver", "${cfg.resolver}:${cfg.port}",
@@ -137,7 +129,6 @@ class DnstunService : VpnService() {
             }
         }.start()
 
-        // ---- 4. wait for the SOCKS5 listener --------------------------------
         var up = false
         for (i in 0 until 120) {
             if (stopping.get()) return
@@ -150,57 +141,75 @@ class DnstunService : VpnService() {
             return
         }
 
-        // ---- 5. hev-socks5-tunnel config ------------------------------------
-        val cfgPath = File(filesDir, "hev.yml").absolutePath
-        File(cfgPath).writeText(
-            """
-            tunnel:
-              mtu: $TUN_MTU
-            socks5:
-              port: ${cfg.socksPort}
-              address: 127.0.0.1
-              udp: 'udp'
-            misc:
-              task-stack-size: 65536
-              connect-timeout: 10000
-              read-write-timeout: 0
-              log-level: warn
-              log-file: stderr
-            """.trimIndent() + "\n"
-        )
+        val sockFile = File(filesDir, "t2s.sock")
+        runCatching { sockFile.delete() }
 
-        // ---- 6. bridge ------------------------------------------------------
-        val ok = try {
-            TProxyService.TProxyStartService(cfgPath, fd.fd)
-        } catch (e: Throwable) {
-            Log.e(TAG, "TProxyStartService threw", e)
-            false
+        val t2sCmd = listOf(
+            t2sPath,
+            "--netif-ipaddr", TUN_GW,
+            "--netif-netmask", TUN_MASK,
+            "--socks-server-addr", "127.0.0.1:${cfg.socksPort}",
+            "--tunmtu", TUN_MTU.toString(),
+            "--sock", sockFile.absolutePath,
+            "--loglevel", "3",
+            "--dnsgw", "127.0.0.1:5353",
+        )
+        Log.i(TAG, "tun2socks: ${t2sCmd.joinToString(" ")}")
+        val tp = try {
+            ProcessBuilder(t2sCmd).redirectErrorStream(true).start()
+        } catch (e: Exception) {
+            fail("cannot start tun2socks: ${e.message}")
+            return
         }
-        if (!ok) {
-            fail("TProxyStartService failed")
+        t2s = tp
+        Thread {
+            runCatching {
+                tp.inputStream.bufferedReader().forEachLine { Log.i(TAG, "t2s: $it") }
+            }
+        }.start()
+
+        if (!sendFd(fd, sockFile)) {
+            fail("failed to pass TUN fd to tun2socks")
             return
         }
 
         running = true
-        lastStats = TunnelStats(state = "connected", text = "tunnel up")
+        lastStats = TunnelStats(state = "connected", text = "tun2socks + engine")
         startStatsLoop()
         Log.i(TAG, "tunnel running")
+    }
+
+    private fun sendFd(pfd: ParcelFileDescriptor, sockPath: File): Boolean {
+        repeat(25) {
+            try {
+                if (!sockPath.exists()) {
+                    Thread.sleep(200)
+                    return@repeat
+                }
+                val ls = LocalSocket()
+                ls.connect(
+                    LocalSocketAddress(sockPath.absolutePath, LocalSocketAddress.Namespace.FILESYSTEM)
+                )
+                ls.setFileDescriptorsForSend(arrayOf(pfd.fileDescriptor))
+                ls.outputStream.write(42)
+                ls.shutdownOutput()
+                ls.close()
+                Log.i(TAG, "tun fd sent")
+                return true
+            } catch (e: Exception) {
+                Thread.sleep(200)
+            }
+        }
+        return false
     }
 
     private fun startStatsLoop() {
         statsThread = Thread {
             while (running && !stopping.get()) {
-                val st = runCatching { TProxyService.TProxyGetStats() }.getOrNull()
-                val tx = if (st != null && st.size >= 2) st[0] else 0L
-                val rx = if (st != null && st.size >= 2) st[1] else 0L
-                val alive = engine?.isAlive == true
+                val alive = engine?.isAlive == true && t2s?.isAlive == true
                 lastStats = TunnelStats(
                     state = if (alive) "connected" else "engine stopped",
-                    text = "engine ${if (alive) "running" else "dead"}",
-                    txBytes = tx,
-                    rxBytes = rx,
-                    upMB = tx / 1048576.0,
-                    downMB = rx / 1048576.0,
+                    text = if (alive) "tun2socks + engine" else "process dead",
                 )
                 Thread.sleep(2000)
             }
@@ -225,7 +234,8 @@ class DnstunService : VpnService() {
 
     private fun stopTunnel() {
         stopping.set(true)
-        runCatching { TProxyService.TProxyStopService() }
+        runCatching { t2s?.destroy() }
+        t2s = null
         runCatching { engine?.destroy() }
         engine = null
         runCatching { pfd?.close() }
@@ -268,7 +278,7 @@ class DnstunService : VpnService() {
         )
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("DNSTun")
-            .setContentText("resolver ${cfg.resolver} - ${cfg.zone}")
+            .setContentText("tun2socks ${cfg.resolver}")
             .setSmallIcon(android.R.drawable.stat_sys_upload_done)
             .setContentIntent(open)
             .addAction(Notification.Action.Builder(null, "Stop", stop).build())
