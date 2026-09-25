@@ -273,7 +273,8 @@ type Tunnel struct {
 	zone     string
 	sid      string
 	chunk    int
-	depth    int
+	depth    int // current in-flight window (AIMD-controlled)
+	maxDepth int // ceiling for the window: the carrier drops us above its limit
 	edns     int
 
 	socksAddr string
@@ -302,6 +303,10 @@ type Tunnel struct {
 	writeErrs int64
 	upDrops   int64
 	closed    int32
+
+	// AIMD window accounting (guard with t.mu or use only in control)
+	ctlSent int64
+	ctlRecv int64
 	// lastActive is the last time real payload moved in either direction
 	// (not mere poll acks) -- the idle-backoff signal for pump().
 	lastActive int64
@@ -343,6 +348,7 @@ func NewTunnel(resolver, zone, sid, listenAddr string, chunk, depth, edns int) (
 		sid:       sid,
 		chunk:     chunk,
 		depth:     depth,
+		maxDepth:  depth,
 		edns:      edns,
 		socksAddr: listenAddr,
 		stop:      make(chan struct{}),
@@ -412,6 +418,8 @@ func (t *Tunnel) run() {
 	defer retick.Stop()
 	stat := time.NewTicker(5 * time.Second)
 	defer stat.Stop()
+	ctick := time.NewTicker(time.Second)
+	defer ctick.Stop()
 
 	for {
 		select {
@@ -419,6 +427,8 @@ func (t *Tunnel) run() {
 			t.pump()
 		case <-retick.C:
 			t.retransmit()
+		case <-ctick.C:
+			t.control()
 		case <-stat.C:
 			t.report()
 		case <-t.stop:
@@ -448,11 +458,16 @@ func (t *Tunnel) closing() bool {
 	return atomic.LoadInt32(&t.closed) == 1
 }
 
-// SetDepth changes the in-flight query window (the throughput lever).
+// SetDepth sets the ceiling for the in-flight query window. The live window
+// is driven by AIMD (see control) so it stays under whatever the resolver on
+// the path tolerates.
 func (t *Tunnel) SetDepth(d int) {
 	t.mu.Lock()
 	if d > 0 {
-		t.depth = d
+		t.maxDepth = d
+		if t.depth > d {
+			t.depth = d
+		}
 	}
 	t.mu.Unlock()
 }
@@ -674,6 +689,57 @@ func (t *Tunnel) onReply(msg []byte) {
 	s.deliver(d)
 }
 
+// control is the congestion loop for the query window. The resolver on the
+// path answers a few hundred queries per second and then cuts the client off
+// entirely: measured against the Smarty/Three resolver, ~590 q/s is fine while
+// a two-second burst at window 8192 (~25k q/s) got the client blackholed
+// (qsent climbing, qrecv frozen at zero). So the window walks up while loss is
+// low and collapses the moment replies stop.
+func (t *Tunnel) control() {
+	sent := atomic.LoadInt64(&t.qSent)
+	recv := atomic.LoadInt64(&t.qRecv)
+	ds := sent - t.ctlSent
+	dr := recv - t.ctlRecv
+	t.ctlSent, t.ctlRecv = sent, recv
+
+	t.mu.Lock()
+	d, maxD := t.depth, t.maxDepth
+	t.mu.Unlock()
+
+	changed := false
+	switch {
+	case ds < 4:
+		// Idle: leave the learned window alone, the pump already throttles.
+	case dr == 0:
+		// Blackout: the resolver has stopped answering us. Drop to a slow
+		// probe rate so the block can expire instead of feeding it.
+		if d > 8 {
+			d = 8
+			changed = true
+		}
+	case ds-dr > ds/5:
+		// More than 20% loss: back off a notch.
+		d = d * 3 / 4
+		if d < 8 {
+			d = 8
+		}
+		changed = true
+	case ds-dr < ds/20 && d < maxD:
+		// Under 5% loss: walk the window up.
+		d += 32
+		if d > maxD {
+			d = maxD
+		}
+		changed = true
+	}
+	if changed {
+		t.mu.Lock()
+		t.depth = d
+		t.mu.Unlock()
+		log.Printf("engine: window -> %d (sent/s=%d recv/s=%d ceiling=%d)", d, ds, dr, maxD)
+	}
+}
+
 func (t *Tunnel) report() {
 	last := atomic.LoadInt64(&t.lastRecv)
 	ago := "never"
@@ -694,7 +760,8 @@ func (t *Tunnel) report() {
 	if qsent > 0 {
 		loss = fmt.Sprintf(" loss=%.1f%%", 100*float64(qsent-qrecv)/float64(qsent))
 	}
-	log.Printf("STATS up=%.0fKB down=%.0fKB qsent=%d qrecv=%d streams=%d inflight=%d retrans=%d last=%s%s%s",
+	log.Printf("STATS win=%d up=%.0fKB down=%.0fKB qsent=%d qrecv=%d streams=%d inflight=%d retrans=%d last=%s%s%s",
+		func() int { t.mu.Lock(); defer t.mu.Unlock(); return t.depth }(),
 		float64(atomic.LoadInt64(&t.upBytes))/1024,
 		float64(atomic.LoadInt64(&t.dnBytes))/1024,
 		qsent, qrecv, streams, inflight, atomic.LoadInt64(&t.retrans), ago, loss, warn)

@@ -24,8 +24,8 @@ const (
 	engineVersion = "6.0.2-engine"
 	defaultSID    = "g7x2k9"
 	defaultChunk  = 56
-	defaultDepth  = 8192
-	deepDepth     = 12288
+	defaultDepth  = 192
+	deepDepth     = 512
 	defaultEDNS   = 1000
 )
 
